@@ -1,0 +1,26 @@
+# Sample AuroraLang Program
+# This demonstrates the visual programming and live coding features
+
+print "Welcome to AuroraOS!"
+print "This is a sample AuroraLang program."
+
+# Visual element
+draw rectangle at (10, 10) size (50, 30) color green
+draw text "Hello World" at (15, 15) color white
+
+# Live coding loop
+for i from 1 to 5:
+    print "Iteration: " + i
+    wait 1000  # milliseconds
+
+# AI assistance example
+suggest "optimize this loop"
+explain "what does this program do"
+
+# Self-explaining comment
+# This program demonstrates basic AuroraLang features:
+# - Text output with print statements
+# - Visual graphics with draw commands
+# - Control flow with loops
+# - AI assistance for code optimization
+# - Self-documenting code

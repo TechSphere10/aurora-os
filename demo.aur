@@ -1,0 +1,103 @@
+# AuroraOS Live Demo Program
+# Demonstrates advanced AuroraLang features
+
+# Create main application window
+window "AuroraOS Demo" at 150,50 size 500,600 color #2E3440
+
+# Title
+text "AuroraOS Live Demo" at 20,20 size 460,30 color #88C0D0 background #2E3440
+
+# Interactive elements
+button "Run Animation" at 20,70 action start_animation
+button "Change Colors" at 150,70 action change_theme
+button "Show Memory" at 280,70 action show_memory
+button "Time Travel" at 380,70 action time_travel_demo
+
+# Canvas for graphics
+canvas "demo_canvas" at 20,120 size 460,200 color #000000
+
+# Status display
+text "Status: Ready" at 20,340 size 460,25 color #A3BE8C
+
+# Variables for demo
+counter = 0
+animation_running = false
+theme_color = #88C0D0
+memory_shown = false
+
+# Functions
+function start_animation()
+    animation_running = true
+    text "Status: Animation Running" at 20,340
+    animate canvas "demo_canvas" rotate by 360 degrees over 3s
+    draw_demo_shapes()
+
+function change_theme()
+    if theme_color == #88C0D0
+        theme_color = #BF616A
+    else if theme_color == #BF616A
+        theme_color = #EBCB8B
+    else
+        theme_color = #88C0D0
+
+    window "AuroraOS Demo" color theme_color
+    text "Theme changed!" at 20,370 color theme_color
+
+function show_memory()
+    memory_shown = not memory_shown
+    if memory_shown
+        text "Memory visualization active" at 20,400 color #A3BE8C
+        # In real implementation, this would show actual memory map
+    else
+        text "Memory visualization hidden" at 20,400 color #BF616A
+
+function time_travel_demo()
+    text "Time Travel Demo Active" at 20,430 color #EBCB8B
+    # Demonstrate variable history
+    counter = counter + 1
+    print "Counter at step " + counter
+
+function draw_demo_shapes()
+    # Draw various shapes on canvas
+    draw rectangle at 10,10 size 100,50 color #88C0D0
+    draw circle at 200,50 radius 30 color #BF616A
+    draw line from 300,10 to 400,80 color #EBCB8B
+
+    # Add some animated elements
+    for i in range(1, 5)
+        x = 50 + i * 80
+        y = 120
+        draw circle at x,y radius 15 color #A3BE8C
+        animate circle at x,y glow #FFFFFF over 1s
+
+# Live coding demonstration
+live on
+
+# Event handlers
+function on_button_click()
+    counter = counter + 1
+    text "Button clicked " + counter + " times" at 20,460
+
+# Animation loop (simplified)
+function animation_loop()
+    if animation_running
+        # Update animation frame
+        counter = counter + 1
+        if counter > 100
+            animation_running = false
+            text "Status: Animation Complete" at 20,340
+
+# Initialize
+draw_demo_shapes()
+text "Welcome to AuroraOS!" at 20,490 color #88C0D0
+
+# Comments demonstrating features
+# This program showcases:
+# - Visual UI creation
+# - Interactive elements
+# - Animation system
+# - Live variable modification
+# - Function definitions
+# - Event handling
+# - Color theming
+# - Canvas graphics

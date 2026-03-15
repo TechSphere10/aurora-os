@@ -1,0 +1,15 @@
+print "Hello AuroraOS"
+
+x = 10
+y = 20
+
+print "Sum:"
+print x + y
+
+if x < y
+print "X is smaller"
+else
+print "X is not smaller"
+
+for i from 1 to 3
+print i

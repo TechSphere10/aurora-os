@@ -1,0 +1,17 @@
+# Build artifacts
+build/
+*.bin
+*.o
+*.img
+
+# OS generated files
+*.log
+*.tmp
+
+# IDE files
+.vscode/
+*.swp
+*.swo
+
+# Temporary files
+*~
