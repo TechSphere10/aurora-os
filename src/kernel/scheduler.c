@@ -1,187 +1,104 @@
-#include <stdint.h>
-#include <stdbool.h>
+#include "kernel.h"
 
-// Process Scheduler for AuroraOS
-// Simulates multi-tasking in the OS simulator
+/* ═══════════════════════════════════════════════════════════════════
+   PROCESS  SCHEDULER  –  Priority Round-Robin
+   ═══════════════════════════════════════════════════════════════════ */
 
-#define MAX_PROCESSES 16
-#define STACK_SIZE 1024
-#define TIME_SLICE_MS 10
+static process_t procs[MAX_PROCS];
+static int       proc_count   = 0;
+static int       current_proc = 0;
+static uint32_t  next_pid     = 1;
 
-typedef enum {
-    PROCESS_READY,
-    PROCESS_RUNNING,
-    PROCESS_BLOCKED,
-    PROCESS_TERMINATED
-} process_state_t;
-
-typedef struct {
-    uint32_t pid;
-    char name[32];
-    process_state_t state;
-    uint32_t priority;
-    uint32_t stack[STACK_SIZE];
-    uint32_t stack_pointer;
-    uint32_t program_counter;
-    uint32_t memory_start;
-    uint32_t memory_size;
-    uint32_t creation_time;
-    uint32_t cpu_time;
-    uint32_t last_run_time;
-} process_t;
-
-process_t processes[MAX_PROCESSES];
-uint32_t process_count = 0;
-uint32_t current_process = 0;
-uint32_t next_pid = 1;
-uint32_t system_time = 0;
-
-// Initialize process scheduler
-void scheduler_init() {
-    // Create idle process (always running)
-    create_process("idle", idle_process, 0);
-    processes[0].state = PROCESS_RUNNING;
+void sched_init(void) {
+    kmemset(procs, 0, sizeof(procs));
+    /* PID 0 = kernel idle */
+    procs[0].pid        = 0;
+    kstrcpy(procs[0].name, "idle");
+    procs[0].state      = PROC_RUNNING;
+    procs[0].host_pid   = 0; // Idle has no host
+    procs[0].priority   = 0;
+    procs[0].created_at = timer_seconds();
+    procs[0].memory_kb  = 64;
+    proc_count = 1;
 }
 
-// Create a new process
-uint32_t create_process(const char *name, void (*entry_point)(), uint32_t priority) {
-    if (process_count >= MAX_PROCESSES) return 0;
-
-    uint32_t pid = next_pid++;
-    uint32_t index = process_count++;
-
-    strcpy(processes[index].name, name);
-    processes[index].pid = pid;
-    processes[index].state = PROCESS_READY;
-    processes[index].priority = priority;
-    processes[index].stack_pointer = STACK_SIZE - 1;
-    processes[index].program_counter = (uint32_t)entry_point;
-    processes[index].memory_start = 0; // Virtual memory
-    processes[index].memory_size = 4096; // 4KB per process
-    processes[index].creation_time = system_time;
-    processes[index].cpu_time = 0;
-    processes[index].last_run_time = system_time;
-
-    return pid;
+uint32_t sched_spawn(const char *name, uint32_t priority, uint32_t host_pid) {
+    if (proc_count >= MAX_PROCS) return 0;
+    int idx = proc_count++;
+    procs[idx].pid        = next_pid++;
+    kstrncpy(procs[idx].name, name, PROC_NAME_LEN - 1);
+    procs[idx].state      = PROC_READY;
+    procs[idx].priority   = priority;
+    procs[idx].created_at = timer_seconds();
+    procs[idx].cpu_time   = 0;
+    procs[idx].host_pid   = host_pid;
+    procs[idx].memory_kb  = 128 + priority * 32;
+    char buf[64];
+    if (host_pid != 0) {
+        ksnprintf(buf, sizeof(buf), "Symbiote spawned: %s (pid=%u, host=%u)", name, procs[idx].pid, host_pid);
+    } else {
+        ksnprintf(buf, sizeof(buf), "Process spawned: %s (pid=%u)", name, procs[idx].pid);
+    }
+    timeline_record("kernel", buf);
+    return procs[idx].pid;
 }
 
-// Terminate a process
-void terminate_process(uint32_t pid) {
-    for (uint32_t i = 0; i < process_count; i++) {
-        if (processes[i].pid == pid) {
-            processes[i].state = PROCESS_TERMINATED;
-            // Clean up resources
-            break;
+void sched_kill(uint32_t pid) {
+    if (pid == 0) return; // Cannot kill idle process
+    for (int i = 1; i < proc_count; i++) {
+        if (procs[i].pid == pid) {
+            procs[i].state = PROC_DEAD;
+            char buf[64];
+            ksnprintf(buf, sizeof(buf), "Process killed: %s (pid=%u)", procs[i].name, pid);
+            timeline_record("kernel", buf);
+
+            // Recursively kill all symbiotes of this process
+            for (int j = 1; j < proc_count; j++) {
+                if (procs[j].host_pid == pid) {
+                    sched_kill(procs[j].pid);
+                }
+            }
+            return;
         }
     }
 }
 
-// Schedule next process (round-robin)
-void schedule() {
-    uint32_t next_process = current_process;
-
-    // Find next ready process
-    for (uint32_t i = 1; i < process_count; i++) {
-        uint32_t index = (current_process + i) % process_count;
-        if (processes[index].state == PROCESS_READY) {
-            next_process = index;
-            break;
-        }
-    }
-
-    if (next_process != current_process) {
-        // Context switch
-        context_switch(current_process, next_process);
-        current_process = next_process;
-    }
-
-    system_time += TIME_SLICE_MS;
-}
-
-// Context switch simulation
-void context_switch(uint32_t from_pid, uint32_t to_pid) {
-    // Save current process state
-    processes[from_pid].cpu_time += system_time - processes[from_pid].last_run_time;
-    processes[from_pid].last_run_time = system_time;
-
-    // Restore next process state
-    processes[to_pid].last_run_time = system_time;
-    processes[to_pid].state = PROCESS_RUNNING;
-    processes[from_pid].state = PROCESS_READY;
-}
-
-// Get process list
-uint32_t get_process_list(process_t *buffer, uint32_t max_count) {
-    uint32_t count = 0;
-    for (uint32_t i = 0; i < process_count && count < max_count; i++) {
-        if (processes[i].state != PROCESS_TERMINATED) {
-            buffer[count++] = processes[i];
-        }
-    }
-    return count;
-}
-
-// Get current process
-process_t* get_current_process() {
-    return &processes[current_process];
-}
-
-// Block current process
-void block_current_process() {
-    processes[current_process].state = PROCESS_BLOCKED;
-    schedule();
-}
-
-// Wake up process
-void wakeup_process(uint32_t pid) {
-    for (uint32_t i = 0; i < process_count; i++) {
-        if (processes[i].pid == pid && processes[i].state == PROCESS_BLOCKED) {
-            processes[i].state = PROCESS_READY;
-            break;
+void sched_tick(void) {
+    /* Increment CPU time for current process */
+    if (current_proc < proc_count)
+        procs[current_proc].cpu_time++;
+    /* Round-robin: find next READY process */
+    for (int i = 1; i <= proc_count; i++) {
+        int next = (current_proc + i) % proc_count;
+        if (procs[next].state == PROC_READY || procs[next].state == PROC_RUNNING) {
+            if (current_proc != next) {
+                if (procs[current_proc].state == PROC_RUNNING)
+                    procs[current_proc].state = PROC_READY;
+                procs[next].state = PROC_RUNNING;
+                current_proc = next;
+            }
+            return;
         }
     }
 }
 
-// Idle process (always running when no other processes)
-void idle_process() {
-    while (true) {
-        // Do nothing - just wait
-        __asm__ volatile("nop");
+void sched_list(void) {
+    term_setcolor(VGA_COLOR(VGA_LIGHT_CYAN, VGA_BLACK));
+    term_writeln("  PID   HOST  NAME              STATE     PRI  CPU(t)  MEM(KB)  ACTIVITY");
+    term_writeln("  ───────────────────────────────────────────────────────────────────────");
+    term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+    for (int i = 0; i < proc_count; i++) {
+        if (procs[i].state == PROC_DEAD) continue;
+        const char *st = "READY  ";
+        if (procs[i].state == PROC_RUNNING) st = "RUNNING";
+        if (procs[i].state == PROC_BLOCKED) st = "BLOCKED";
+        term_printf("  %-5u %-5u %-17s %-9s %-4u %-7u %-8u %s\n",
+            procs[i].pid, procs[i].host_pid, procs[i].name, st,
+            procs[i].priority, procs[i].cpu_time,
+            procs[i].memory_kb,
+            procs[i].activity[0] ? procs[i].activity : "-");
     }
 }
 
-// Sleep for milliseconds
-void sleep_ms(uint32_t ms) {
-    uint32_t wake_time = system_time + ms;
-    processes[current_process].state = PROCESS_BLOCKED;
-
-    // In real implementation, this would be handled by timer interrupt
-    while (system_time < wake_time) {
-        schedule();
-    }
-
-    processes[current_process].state = PROCESS_READY;
-}
-
-// Yield CPU to other processes
-void yield() {
-    schedule();
-}
-
-// Get system uptime
-uint32_t get_system_uptime() {
-    return system_time;
-}
-
-// Get CPU usage statistics
-void get_cpu_stats(uint32_t *total_time, uint32_t *idle_time) {
-    *total_time = system_time;
-    *idle_time = processes[0].cpu_time; // Idle process CPU time
-}
-
-// String functions
-char *strcpy(char *dest, const char *src) {
-    char *d = dest;
-    while ((*d++ = *src++));
-    return dest;
-}
+process_t *sched_current(void) { return &procs[current_proc]; }
+int sched_count(void) { return proc_count; }

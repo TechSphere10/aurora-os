@@ -1,276 +1,261 @@
-#include <stdint.h>
-#include <stdbool.h>
+#include "kernel.h"
 
-// Virtual File System for AuroraOS
-// Simulates a file system in memory for the OS simulator
+/* ═══════════════════════════════════════════════════════════════════
+   SEMANTIC  VIRTUAL  FILE  SYSTEM
+   – Standard path-based operations
+   – Per-file tags, activity association, description
+   – Semantic search: find files related to a query
+   ═══════════════════════════════════════════════════════════════════ */
 
-#define MAX_FILES 100
-#define MAX_FILENAME_LEN 32
-#define MAX_FILE_SIZE 4096
-#define MAX_PATH_LEN 128
+static vfs_node_t nodes[VFS_MAX_NODES];
+static int node_count = 0;
 
-typedef struct {
-    char name[MAX_FILENAME_LEN];
-    uint32_t size;
-    uint8_t data[MAX_FILE_SIZE];
-    bool is_directory;
-    uint32_t parent_index;
-    uint32_t created_time;
-    uint32_t modified_time;
-} vfs_node_t;
-
-vfs_node_t vfs_nodes[MAX_FILES];
-uint32_t next_node_index = 0;
-uint32_t root_directory = 0;
-
-// Initialize virtual file system
-void vfs_init() {
-    // Create root directory
-    strcpy(vfs_nodes[0].name, "/");
-    vfs_nodes[0].size = 0;
-    vfs_nodes[0].is_directory = true;
-    vfs_nodes[0].parent_index = 0;
-    vfs_nodes[0].created_time = 0;
-    vfs_nodes[0].modified_time = 0;
-    next_node_index = 1;
-
-    // Create basic directories
-    vfs_create_directory("/home");
-    vfs_create_directory("/system");
-    vfs_create_directory("/apps");
-    vfs_create_directory("/config");
-    vfs_create_directory("/temp");
+/* ── Helpers ───────────────────────────────────────────────────────── */
+static int alloc_node(void) {
+    for (int i = 0; i < VFS_MAX_NODES; i++)
+        if (!nodes[i].used) { kmemset(&nodes[i], 0, sizeof(vfs_node_t)); nodes[i].used = true; return i; }
+    return -1;
 }
 
-// Create a directory
-uint32_t vfs_create_directory(const char *path) {
-    if (next_node_index >= MAX_FILES) return 0;
-
-    char dirname[MAX_FILENAME_LEN];
-    uint32_t parent = vfs_get_parent_directory(path, dirname);
-
-    if (parent == (uint32_t)-1) return 0;
-
-    // Check if directory already exists
-    for (uint32_t i = 0; i < next_node_index; i++) {
-        if (vfs_nodes[i].parent_index == parent &&
-            strcmp(vfs_nodes[i].name, dirname) == 0) {
-            return 0; // Already exists
-        }
-    }
-
-    uint32_t index = next_node_index++;
-    strcpy(vfs_nodes[index].name, dirname);
-    vfs_nodes[index].size = 0;
-    vfs_nodes[index].is_directory = true;
-    vfs_nodes[index].parent_index = parent;
-    vfs_nodes[index].created_time = get_system_time();
-    vfs_nodes[index].modified_time = get_system_time();
-
-    return index;
+static int find_node(const char *path) {
+    for (int i = 0; i < VFS_MAX_NODES; i++)
+        if (nodes[i].used && kstrcmp(nodes[i].path, path) == 0) return i;
+    return -1;
 }
 
-// Create a file
-uint32_t vfs_create_file(const char *path) {
-    if (next_node_index >= MAX_FILES) return 0;
-
-    char filename[MAX_FILENAME_LEN];
-    uint32_t parent = vfs_get_parent_directory(path, filename);
-
-    if (parent == (uint32_t)-1) return 0;
-
-    uint32_t index = next_node_index++;
-    strcpy(vfs_nodes[index].name, filename);
-    vfs_nodes[index].size = 0;
-    vfs_nodes[index].is_directory = false;
-    vfs_nodes[index].parent_index = parent;
-    vfs_nodes[index].created_time = get_system_time();
-    vfs_nodes[index].modified_time = get_system_time();
-
-    return index;
+static void build_path(const char *parent, const char *name, char *out) {
+    if (kstrcmp(parent, "/") == 0)
+        ksnprintf(out, VFS_MAX_PATH, "/%s", name);
+    else
+        ksnprintf(out, VFS_MAX_PATH, "%s/%s", parent, name);
 }
 
-// Write to file
-bool vfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
-    uint32_t file_index = vfs_find_file(path);
-    if (file_index == 0 || vfs_nodes[file_index].is_directory) return false;
+/* ── Init ──────────────────────────────────────────────────────────── */
+void vfs_init(void) {
+    kmemset(nodes, 0, sizeof(nodes));
+    /* Root */
+    int r = alloc_node();
+    kstrcpy(nodes[r].path, "/");
+    kstrcpy(nodes[r].name, "/");
+    nodes[r].is_dir = true;
+    nodes[r].created = timer_seconds();
+    nodes[r].parent  = -1;
+    node_count = 1;
 
-    if (size > MAX_FILE_SIZE) size = MAX_FILE_SIZE;
+    /* Standard directories */
+    vfs_mkdir("/home");
+    vfs_mkdir("/home/user");
+    vfs_mkdir("/system");
+    vfs_mkdir("/system/bin");
+    vfs_mkdir("/system/lib");
+    vfs_mkdir("/activities");
+    vfs_mkdir("/projects");
+    vfs_mkdir("/snapshots");
+    vfs_mkdir("/tmp");
+    vfs_mkdir("/docs");
 
-    memcpy(vfs_nodes[file_index].data, data, size);
-    vfs_nodes[file_index].size = size;
-    vfs_nodes[file_index].modified_time = get_system_time();
+    /* Seed a few demo files */
+    vfs_create("/home/user/welcome.txt");
+    vfs_write("/home/user/welcome.txt",
+        "Welcome to AuroraOS!\n"
+        "Type 'help' in the shell to see all commands.\n"
+        "Try: activity create MyProject\n"
+        "     timeline\n"
+        "     aurora run /home/user/demo.al\n", 0);
+    vfs_tag("/home/user/welcome.txt", "docs");
+    vfs_tag("/home/user/welcome.txt", "welcome");
 
-    return true;
+    vfs_create("/home/user/demo.al");
+    vfs_write("/home/user/demo.al",
+        "# AuroraLang demo program\n"
+        "let name = \"AuroraOS\"\n"
+        "let version = 2\n"
+        "print \"Hello from \" + name + \" v\" + str(version)\n"
+        "loop i from 1 to 5 {\n"
+        "    print \"  Step \" + str(i)\n"
+        "}\n"
+        "let result = add(10, 32)\n"
+        "print \"10 + 32 = \" + str(result)\n"
+        "function add(a, b) {\n"
+        "    return a + b\n"
+        "}\n", 0);
+    vfs_tag("/home/user/demo.al", "code");
+    vfs_tag("/home/user/demo.al", "auroralang");
+    vfs_tag("/home/user/demo.al", "demo");
 }
 
-// Read from file
-bool vfs_read_file(const char *path, uint8_t *buffer, uint32_t *size) {
-    uint32_t file_index = vfs_find_file(path);
-    if (file_index == 0 || vfs_nodes[file_index].is_directory) return false;
-
-    uint32_t read_size = vfs_nodes[file_index].size;
-    if (*size < read_size) read_size = *size;
-
-    memcpy(buffer, vfs_nodes[file_index].data, read_size);
-    *size = read_size;
-
-    return true;
+/* ── mkdir ─────────────────────────────────────────────────────────── */
+int vfs_mkdir(const char *path) {
+    if (find_node(path) >= 0) return 0; /* already exists */
+    int idx = alloc_node();
+    if (idx < 0) return -1;
+    kstrcpy(nodes[idx].path, path);
+    /* Extract name */
+    const char *slash = path + kstrlen(path);
+    while (slash > path && *slash != '/') slash--;
+    kstrcpy(nodes[idx].name, slash + 1);
+    nodes[idx].is_dir   = true;
+    nodes[idx].created  = timer_seconds();
+    nodes[idx].modified = timer_seconds();
+    node_count++;
+    return idx;
 }
 
-// Find file by path
-uint32_t vfs_find_file(const char *path) {
-    if (strcmp(path, "/") == 0) return 0;
+/* ── create file ───────────────────────────────────────────────────── */
+int vfs_create(const char *path) {
+    if (find_node(path) >= 0) return find_node(path);
+    int idx = alloc_node();
+    if (idx < 0) return -1;
+    kstrcpy(nodes[idx].path, path);
+    const char *slash = path + kstrlen(path);
+    while (slash > path && *slash != '/') slash--;
+    kstrcpy(nodes[idx].name, slash + 1);
+    nodes[idx].is_dir   = false;
+    nodes[idx].created  = timer_seconds();
+    nodes[idx].modified = timer_seconds();
+    node_count++;
+    return idx;
+}
 
-    char path_copy[MAX_PATH_LEN];
-    strcpy(path_copy, path);
+/* ── write ─────────────────────────────────────────────────────────── */
+int vfs_write(const char *path, const void *data, uint32_t size) {
+    int idx = find_node(path);
+    if (idx < 0) idx = vfs_create(path);
+    if (idx < 0) return -1;
+    if (!size) size = (uint32_t)kstrlen((const char *)data);
+    if (size > VFS_MAX_DATA) size = VFS_MAX_DATA;
+    kmemcpy(nodes[idx].data, data, size);
+    nodes[idx].size     = size;
+    nodes[idx].modified = timer_seconds();
+    return 0;
+}
 
-    char *token = strtok(path_copy, "/");
-    uint32_t current = 0;
+/* ── read ──────────────────────────────────────────────────────────── */
+int vfs_read(const char *path, void *buf, uint32_t *size) {
+    int idx = find_node(path);
+    if (idx < 0) return -1;
+    uint32_t n = nodes[idx].size;
+    if (size && *size < n) n = *size;
+    kmemcpy(buf, nodes[idx].data, n);
+    if (size) *size = n;
+    return 0;
+}
 
-    while (token) {
-        bool found = false;
-        for (uint32_t i = 0; i < next_node_index; i++) {
-            if (vfs_nodes[i].parent_index == current &&
-                strcmp(vfs_nodes[i].name, token) == 0) {
-                current = i;
-                found = true;
-                break;
+/* ── delete ────────────────────────────────────────────────────────── */
+int vfs_delete(const char *path) {
+    int idx = find_node(path);
+    if (idx < 0) return -1;
+    nodes[idx].used = false;
+    node_count--;
+    return 0;
+}
+
+/* ── find ──────────────────────────────────────────────────────────── */
+int vfs_find(const char *path) { return find_node(path); }
+
+/* ── ls ────────────────────────────────────────────────────────────── */
+void vfs_ls(const char *path) {
+    int found = 0;
+    for (int i = 0; i < VFS_MAX_NODES; i++) {
+        if (!nodes[i].used) continue;
+        if (kstrcmp(nodes[i].path, path) == 0) continue; /* skip self */
+        /* Check if direct child */
+        const char *p = nodes[i].path;
+        size_t plen = kstrlen(path);
+        if (kstrncmp(p, path, plen) != 0) continue;
+        const char *rest = p + plen;
+        if (*rest == '/' && kstrcmp(path, "/") != 0) rest++;
+        else if (kstrcmp(path, "/") == 0 && *rest == '/') rest++;
+        else continue;
+        if (kstrchr(rest, '/')) continue; /* not direct child */
+        /* Print */
+        if (nodes[i].is_dir) {
+            term_setcolor(VGA_COLOR(VGA_LIGHT_CYAN, VGA_BLACK));
+            term_printf("  [DIR]  %s\n", nodes[i].name);
+        } else {
+            term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+            term_printf("  [FILE] %s  (%u bytes)", nodes[i].name, nodes[i].size);
+            if (nodes[i].tag_count > 0) {
+                term_setcolor(VGA_COLOR(VGA_LIGHT_GREEN, VGA_BLACK));
+                term_write("  tags:");
+                for (int t = 0; t < nodes[i].tag_count; t++)
+                    term_printf(" #%s", nodes[i].tags[t]);
             }
+            term_putchar('\n');
         }
-        if (!found) return 0;
-        token = strtok(NULL, "/");
+        term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+        found++;
     }
-
-    return current;
+    if (!found) term_writeln("  (empty)");
 }
 
-// List directory contents
-uint32_t vfs_list_directory(const char *path, char *buffer, uint32_t buffer_size) {
-    uint32_t dir_index = vfs_find_file(path);
-    if (dir_index == 0 || !vfs_nodes[dir_index].is_directory) return 0;
+/* ── tag ───────────────────────────────────────────────────────────── */
+void vfs_tag(const char *path, const char *tag) {
+    int idx = find_node(path);
+    if (idx < 0) return;
+    if (nodes[idx].tag_count >= VFS_MAX_TAGS) return;
+    /* Avoid duplicates */
+    for (int t = 0; t < nodes[idx].tag_count; t++)
+        if (kstrcmp(nodes[idx].tags[t], tag) == 0) return;
+    kstrcpy(nodes[idx].tags[nodes[idx].tag_count++], tag);
+}
 
-    uint32_t count = 0;
-    uint32_t offset = 0;
+/* ── set activity ──────────────────────────────────────────────────── */
+void vfs_set_activity(const char *path, const char *activity) {
+    int idx = find_node(path);
+    if (idx >= 0) kstrcpy(nodes[idx].activity, activity);
+}
 
-    for (uint32_t i = 0; i < next_node_index; i++) {
-        if (vfs_nodes[i].parent_index == dir_index) {
-            if (offset + MAX_FILENAME_LEN + 2 < buffer_size) {
-                if (vfs_nodes[i].is_directory) {
-                    buffer[offset++] = '[';
-                    strcpy(buffer + offset, vfs_nodes[i].name);
-                    offset += strlen(vfs_nodes[i].name);
-                    buffer[offset++] = ']';
-                } else {
-                    strcpy(buffer + offset, vfs_nodes[i].name);
-                    offset += strlen(vfs_nodes[i].name);
-                }
-                buffer[offset++] = '\n';
-                count++;
+/* ── semantic find ─────────────────────────────────────────────────── */
+void vfs_semantic_find(const char *query) {
+    term_setcolor(VGA_COLOR(VGA_LIGHT_CYAN, VGA_BLACK));
+    term_printf("  Semantic search: \"%s\"\n", query);
+    term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+    int found = 0;
+    for (int i = 0; i < VFS_MAX_NODES; i++) {
+        if (!nodes[i].used || nodes[i].is_dir) continue;
+        bool match = false;
+        /* Match against name */
+        if (kstrstr(nodes[i].name, query)) match = true;
+        /* Match against tags */
+        for (int t = 0; t < nodes[i].tag_count && !match; t++)
+            if (kstrstr(nodes[i].tags[t], query)) match = true;
+        /* Match against activity */
+        if (kstrstr(nodes[i].activity, query)) match = true;
+        /* Match against description */
+        if (kstrstr(nodes[i].description, query)) match = true;
+        /* Match against file content (first 256 bytes) */
+        if (!match && nodes[i].size > 0) {
+            char tmp[257]; uint32_t n = nodes[i].size < 256 ? nodes[i].size : 256;
+            kmemcpy(tmp, nodes[i].data, n); tmp[n] = '\0';
+            if (kstrstr(tmp, query)) match = true;
+        }
+        if (match) {
+            term_printf("  %-40s  [%s]", nodes[i].path,
+                        nodes[i].activity[0] ? nodes[i].activity : "general");
+            if (nodes[i].tag_count > 0) {
+                term_setcolor(VGA_COLOR(VGA_LIGHT_GREEN, VGA_BLACK));
+                for (int t = 0; t < nodes[i].tag_count; t++)
+                    term_printf(" #%s", nodes[i].tags[t]);
+                term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
             }
+            term_putchar('\n');
+            found++;
         }
     }
-
-    buffer[offset] = '\0';
-    return count;
+    if (!found) term_writeln("  No files found matching that query.");
+    else term_printf("  %d file(s) found.\n", found);
 }
 
-// Delete file or directory
-bool vfs_delete(const char *path) {
-    uint32_t index = vfs_find_file(path);
-    if (index == 0) return false;
-
-    // Mark as deleted (simple implementation)
-    vfs_nodes[index].name[0] = '\0';
-    return true;
-}
-
-// Get file info
-bool vfs_get_info(const char *path, uint32_t *size, bool *is_dir, uint32_t *created, uint32_t *modified) {
-    uint32_t index = vfs_find_file(path);
-    if (index == 0) return false;
-
-    *size = vfs_nodes[index].size;
-    *is_dir = vfs_nodes[index].is_directory;
-    *created = vfs_nodes[index].created_time;
-    *modified = vfs_nodes[index].modified_time;
-    return true;
-}
-
-// Helper functions
-uint32_t vfs_get_parent_directory(const char *path, char *basename) {
-    char path_copy[MAX_PATH_LEN];
-    strcpy(path_copy, path);
-
-    char *last_slash = strrchr(path_copy, '/');
-    if (!last_slash) return (uint32_t)-1;
-
-    *last_slash = '\0';
-    strcpy(basename, last_slash + 1);
-
-    if (strlen(path_copy) == 0) return 0; // Root
-
-    return vfs_find_file(path_copy);
-}
-
-uint32_t get_system_time() {
-    // Simple time simulation
-    static uint32_t time = 0;
-    return time++;
-}
-
-// String functions
-char *strtok(char *str, const char *delim) {
-    static char *last = NULL;
-    if (str) last = str;
-    if (!last) return NULL;
-
-    char *start = last;
-    while (*last && !strchr(delim, *last)) last++;
-    if (*last) *last++ = '\0';
-    return start;
-}
-
-char *strrchr(const char *s, int c) {
-    const char *last = NULL;
-    while (*s) {
-        if (*s == c) last = s;
-        s++;
+/* ── activity files ────────────────────────────────────────────────── */
+void vfs_activity_files(const char *activity) {
+    int found = 0;
+    for (int i = 0; i < VFS_MAX_NODES; i++) {
+        if (!nodes[i].used || nodes[i].is_dir) continue;
+        if (kstrcmp(nodes[i].activity, activity) == 0) {
+            term_printf("  %s  (%u bytes)\n", nodes[i].path, nodes[i].size);
+            found++;
+        }
     }
-    return (char*)last;
-}
-
-char *strchr(const char *s, int c) {
-    while (*s) {
-        if (*s == c) return (char*)s;
-        s++;
-    }
-    return NULL;
-}
-
-int strcmp(const char *s1, const char *s2) {
-    while (*s1 && *s2 && *s1 == *s2) {
-        s1++;
-        s2++;
-    }
-    return *s1 - *s2;
-}
-
-size_t strlen(const char *s) {
-    size_t len = 0;
-    while (s[len]) len++;
-    return len;
-}
-
-char *strcpy(char *dest, const char *src) {
-    char *d = dest;
-    while ((*d++ = *src++));
-    return dest;
-}
-
-void *memcpy(void *dest, const void *src, size_t n) {
-    char *d = dest;
-    const char *s = src;
-    while (n--) *d++ = *s++;
-    return dest;
+    if (!found) term_writeln("  No files associated with this activity.");
 }

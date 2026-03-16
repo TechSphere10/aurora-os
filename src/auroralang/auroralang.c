@@ -8,6 +8,7 @@
 #define MAX_CODE_LINES 1000
 #define MAX_FUNCTIONS 50
 #define MAX_UI_ELEMENTS 20
+#define MAX_SCOPE_DEPTH 10
 
 // Variable storage with types
 typedef enum {
@@ -78,6 +79,13 @@ int current_step = -1;
 // Code storage
 char *code_lines[MAX_CODE_LINES];
 int code_line_count = 0;
+
+// Semantic Scopes
+#define MAX_SCOPE_NAME_LEN 32
+char semantic_scope_stack[MAX_SCOPE_DEPTH][MAX_SCOPE_NAME_LEN];
+int scope_depth = 0;
+
+void parse_scope(char *line);
 
 // Enhanced variable management
 int find_variable(const char *name) {
@@ -292,6 +300,8 @@ void interpret_line(char *line) {
     // Skip comments
     if (line[0] == '#' || (line[0] == '/' && line[1] == '/')) return;
 
+    parse_scope(line);
+
     // Enhanced parsing
     if (strncmp(line, "print", 5) == 0) {
         parse_print(line);
@@ -341,11 +351,17 @@ char *strstr(const char *haystack, const char *needle) {
 void run_auroralang(const char *filename) {
     // TODO: Load file from disk
     // For now, hardcode a simple program
+    // New program demonstrates semantic scopes
     char *program[] = {
         "print \"Hello AuroraOS\"",
         "x = 10",
-        "y = 20",
-        "print x + y",
+        "print \"Entering UI update scope...\"",
+        "scope ui_update {",
+        "  print \"  Batching this update...\"",
+        "  y = 20",
+        "}",
+        "print \"Exited scope. UI would now be redrawn.\"",
+        "print y",
         NULL
     };
 
@@ -388,6 +404,51 @@ void parse_visual_effects(char *line) {
     } else if (strstr(line, "draw")) {
         // draw shape on canvas
         // TODO: Implement drawing
+    }
+}
+
+// Placeholder for handling semantic scope actions
+void handle_semantic_scope(const char* scope_type, bool is_enter) {
+    if (is_enter) {
+        // This is where you would trigger the "on enter" logic
+        // For example, for a "ui_update" scope, you might call a kernel
+        // function to start batching graphics commands.
+        // print("Entering scope: "), print(scope_type);
+    } else {
+        // This is where you would trigger the "on exit" logic
+        // For a "ui_update" scope, you'd call the function to execute
+        // the batched commands and redraw the screen.
+        // print("Exiting scope: "), print(scope_type);
+    }
+}
+
+// Basic parser for semantic scopes
+void parse_scope(char *line) {
+    // Trim leading whitespace
+    char *start = line;
+    while (*start == ' ') start++;
+
+    // Check for scope entry: scope <type> {
+    if (strncmp(start, "scope ", 6) == 0) {
+        char *type_start = start + 6;
+        char *type_end = strchr(type_start, ' ');
+        if (type_end && strchr(type_end, '{')) {
+            *type_end = '\0';
+            if (scope_depth < MAX_SCOPE_DEPTH) {
+                strcpy(semantic_scope_stack[scope_depth], type_start);
+                handle_semantic_scope(semantic_scope_stack[scope_depth], true);
+                scope_depth++;
+            }
+        }
+        // In a real parser, we'd consume the line here.
+        // For this simple interpreter, we'll just let it fall through.
+    }
+    // Check for scope exit: }
+    else if (strcmp(start, "}") == 0) {
+        if (scope_depth > 0) {
+            scope_depth--;
+            handle_semantic_scope(semantic_scope_stack[scope_depth], false);
+        }
     }
 }
 

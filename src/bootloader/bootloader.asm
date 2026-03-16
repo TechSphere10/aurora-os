@@ -1,37 +1,45 @@
-[BITS 16]
-[ORG 0x7C00]
+; AuroraOS Multiboot Bootloader
+; Compliant with Multiboot Specification 1 (GRUB compatible)
 
-start:
+BITS 32
+
+; Multiboot header constants
+MULTIBOOT_MAGIC     equ 0x1BADB002
+MULTIBOOT_FLAGS     equ 0x00000003   ; align modules + memory map
+MULTIBOOT_CHECKSUM  equ -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
+
+; Kernel stack size
+STACK_SIZE equ 0x4000   ; 16KB
+
+section .multiboot
+align 4
+    dd MULTIBOOT_MAGIC
+    dd MULTIBOOT_FLAGS
+    dd MULTIBOOT_CHECKSUM
+
+section .bss
+align 16
+stack_bottom:
+    resb STACK_SIZE
+stack_top:
+
+section .text
+global _start
+extern kernel_main
+
+_start:
     ; Set up stack
-    mov ax, 0x07C0
-    add ax, 288
-    mov ss, ax
-    mov sp, 4096
+    mov esp, stack_top
 
-    ; Set up data segment
-    mov ax, 0x07C0
-    mov ds, ax
+    ; Push multiboot info pointer and magic for kernel
+    push ebx        ; multiboot info struct pointer
+    push eax        ; multiboot magic number
 
-    ; Print boot message
-    mov si, boot_msg
-    call print_string
+    ; Call kernel main
+    call kernel_main
 
-    ; Load kernel (simplified - just jump to kernel location)
-    ; In a real OS, you'd load from disk
-    jmp 0x1000:0x0000
-
-print_string:
-    lodsb
-    or al, al
-    jz done
-    mov ah, 0x0E
-    int 0x10
-    jmp print_string
-done:
-    ret
-
-boot_msg db 'AuroraOS Bootloader v1.0', 0x0D, 0x0A, 'Initializing system...', 0x0D, 0x0A, 0
-
-; Pad to 512 bytes and add boot signature
-times 510 - ($ - $$) db 0
-dw 0xAA55
+    ; Should never return - halt
+.hang:
+    cli
+    hlt
+    jmp .hang

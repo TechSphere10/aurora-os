@@ -15,6 +15,7 @@ void vfs_list_dir(const char *path);
 void vfs_create_file(const char *path, const char *content);
 void vfs_read_file(const char *path);
 void scheduler_list_processes();
+uint32_t sched_spawn(const char *name, uint32_t priority, uint32_t host_pid);
 void desktop_show_info();
 void services_log_message(const char *message);
 void packages_list_installed();
@@ -52,6 +53,7 @@ void cmd_desktop(int argc, char *argv[]);
 void cmd_services(int argc, char *argv[]);
 void cmd_packages(int argc, char *argv[]);
 void cmd_install(int argc, char *argv[]);
+void cmd_symspawn(int argc, char *argv[]);
 
 // Command table
 command_t commands[] = {
@@ -72,6 +74,7 @@ command_t commands[] = {
     {"services", "Show system services", cmd_services},
     {"packages", "List installed packages", cmd_packages},
     {"install", "Install package", cmd_install},
+    {"symspawn", "Spawn a symbiote process: symspawn <host_pid> <name>", cmd_symspawn},
     {NULL, NULL, NULL}
 };
 
@@ -259,6 +262,22 @@ void cmd_install(int argc, char *argv[]) {
     packages_install(argv[1]);
 }
 
+void cmd_symspawn(int argc, char *argv[]) {
+    if (argc < 3) {
+        print_string("Usage: symspawn <host_pid> <name>", 0, 1, 0x07);
+        return;
+    }
+    uint32_t host_pid = atoi(argv[1]);
+    const char* name = argv[2];
+    uint32_t pid = sched_spawn(name, 1, host_pid);
+    if (pid > 0) {
+        print_string("Spawned symbiote '", 0, 1, 0x07);
+        print_string(name, 19, 1, 0x07);
+        print_string("' with PID ", 19 + strlen(name), 1, 0x07);
+        print_number(pid, 19 + strlen(name) + 11, 1);
+    }
+}
+
 // Shell main loop
 void shell_main() {
     char cmd_buffer[MAX_CMD_LEN];
@@ -373,4 +392,14 @@ int strlen(const char *s) {
     int len = 0;
     while (s[len]) len++;
     return len;
+}
+
+// Simple atoi for shell commands
+int atoi(const char *s) {
+    int num = 0;
+    while (*s >= '0' && *s <= '9') {
+        num = num * 10 + (*s - '0');
+        s++;
+    }
+    return num;
 }

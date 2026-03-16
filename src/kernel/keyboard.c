@@ -1,139 +1,78 @@
-#include <stdint.h>
-#include <stdbool.h>
+#include "kernel.h"
 
-// Keyboard driver for AuroraOS
-#define KEYBOARD_DATA_PORT 0x60
-#define KEYBOARD_STATUS_PORT 0x64
+/* ═══════════════════════════════════════════════════════════════════
+   PS/2  KEYBOARD  DRIVER
+   ═══════════════════════════════════════════════════════════════════ */
 
-// Scancode to ASCII mapping (simplified)
-char scancode_to_ascii[128] = {
-    0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
-    '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
-    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',
-    0, '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0,
-    '*', 0, ' ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, '-', 0, 0, 0, '+', 0, 0, 0, 0, 0, 0, 0
+#define KB_DATA   0x60
+#define KB_STATUS 0x64
+#define KB_BUF    256
+
+static char kb_buf[KB_BUF];
+static volatile int kb_head = 0, kb_tail = 0;
+static bool kb_shift = false, kb_ctrl = false, kb_caps = false;
+
+/* US QWERTY scancode set 1 – normal and shifted */
+static const char sc_normal[128] = {
+    0,  27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
+    '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
+    0,  'a','s','d','f','g','h','j','k','l',';','\'','`',
+    0,  '\\','z','x','c','v','b','n','m',',','.','/', 0,
+    '*', 0, ' ', 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+    0,  0,  0,  0,  0,  '-', 0,  0,  0,  '+', 0,  0,  0,
+    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0
 };
 
-bool shift_pressed = false;
-bool caps_lock = false;
+static const char sc_shift[128] = {
+    0,  27, '!','@','#','$','%','^','&','*','(',')','_','+','\b',
+    '\t','Q','W','E','R','T','Y','U','I','O','P','{','}','\n',
+    0,  'A','S','D','F','G','H','J','K','L',':','"','~',
+    0,  '|','Z','X','C','V','B','N','M','<','>','?', 0,
+    '*', 0, ' ', 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+    0,  0,  0,  0,  0,  '-', 0,  0,  0,  '+', 0,  0,  0,
+    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0
+};
 
-// Keyboard buffer
-#define KEYBOARD_BUFFER_SIZE 256
-char keyboard_buffer[KEYBOARD_BUFFER_SIZE];
-int buffer_head = 0;
-int buffer_tail = 0;
+static void kb_irq_handler(void) {
+    uint8_t sc = inb(KB_DATA);
+    bool released = (sc & 0x80) != 0;
+    uint8_t key   = sc & 0x7F;
 
-// Initialize keyboard
-void init_keyboard() {
-    // Enable keyboard interrupts (simplified)
-    // In real implementation, would set up IDT and PIC
+    /* Modifier keys */
+    if (key == 0x2A || key == 0x36) { kb_shift = !released; return; }
+    if (key == 0x1D)                { kb_ctrl  = !released; return; }
+    if (key == 0x3A && !released)   { kb_caps  = !kb_caps;  return; }
+    if (released) return;
+
+    char c = 0;
+    bool upper = kb_shift ^ kb_caps;
+    if (key < 128) c = upper ? sc_shift[key] : sc_normal[key];
+    if (!c) return;
+
+    /* Ctrl combos */
+    if (kb_ctrl) {
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1); /* Ctrl+A=1 */
+        else if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 1);
+    }
+
+    int next = (kb_head + 1) % KB_BUF;
+    if (next != kb_tail) {
+        kb_buf[kb_head] = c;
+        kb_head = next;
+    }
 }
 
-// Read keyboard scancode
-uint8_t read_keyboard_scancode() {
-    while ((inb(KEYBOARD_STATUS_PORT) & 1) == 0);
-    return inb(KEYBOARD_DATA_PORT);
+void keyboard_init(void) {
+    irq_install_handler(1, kb_irq_handler);
+    /* Unmask IRQ1 */
+    outb(0x21, inb(0x21) & ~0x02);
 }
 
-// Convert scancode to ASCII
-char scancode_to_char(uint8_t scancode) {
-    if (scancode & 0x80) {
-        // Key release
-        if (scancode == 0xAA || scancode == 0xB6) {
-            shift_pressed = false;
-        }
-        return 0;
-    }
+bool keyboard_has_data(void) { return kb_head != kb_tail; }
 
-    // Key press
-    if (scancode == 0x2A || scancode == 0x36) {
-        shift_pressed = true;
-        return 0;
-    }
-
-    if (scancode == 0x3A) {
-        caps_lock = !caps_lock;
-        return 0;
-    }
-
-    char c = scancode_to_ascii[scancode];
-    if (c >= 'a' && c <= 'z') {
-        if (shift_pressed || caps_lock) {
-            c -= 32; // Convert to uppercase
-        }
-    } else if (shift_pressed) {
-        // Handle shift for other characters
-        switch (c) {
-            case '1': c = '!'; break;
-            case '2': c = '@'; break;
-            case '3': c = '#'; break;
-            case '4': c = '$'; break;
-            case '5': c = '%'; break;
-            case '6': c = '^'; break;
-            case '7': c = '&'; break;
-            case '8': c = '*'; break;
-            case '9': c = '('; break;
-            case '0': c = ')'; break;
-            case '-': c = '_'; break;
-            case '=': c = '+'; break;
-            case '[': c = '{'; break;
-            case ']': c = '}'; break;
-            case '\\': c = '|'; break;
-            case ';': c = ':'; break;
-            case '\'': c = '"'; break;
-            case ',': c = '<'; break;
-            case '.': c = '>'; break;
-            case '/': c = '?'; break;
-        }
-    }
-
+char keyboard_getchar(void) {
+    while (!keyboard_has_data()) __asm__ volatile("hlt");
+    char c = kb_buf[kb_tail];
+    kb_tail = (kb_tail + 1) % KB_BUF;
     return c;
-}
-
-// Add character to keyboard buffer
-void keyboard_buffer_put(char c) {
-    if (c == 0) return;
-
-    int next = (buffer_head + 1) % KEYBOARD_BUFFER_SIZE;
-    if (next != buffer_tail) {
-        keyboard_buffer[buffer_head] = c;
-        buffer_head = next;
-    }
-}
-
-// Get character from keyboard buffer
-char keyboard_buffer_get() {
-    if (buffer_head == buffer_tail) {
-        return 0;
-    }
-
-    char c = keyboard_buffer[buffer_tail];
-    buffer_tail = (buffer_tail + 1) % KEYBOARD_BUFFER_SIZE;
-    return c;
-}
-
-// Check if keyboard buffer has data
-bool keyboard_has_data() {
-    return buffer_head != buffer_tail;
-}
-
-// Keyboard interrupt handler (simplified)
-void keyboard_interrupt_handler() {
-    uint8_t scancode = read_keyboard_scancode();
-    char c = scancode_to_char(scancode);
-    if (c) {
-        keyboard_buffer_put(c);
-    }
-}
-
-// Port I/O functions
-uint8_t inb(uint16_t port) {
-    uint8_t result;
-    __asm__ volatile("inb %1, %0" : "=a"(result) : "Nd"(port));
-    return result;
-}
-
-void outb(uint16_t port, uint8_t value) {
-    __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }

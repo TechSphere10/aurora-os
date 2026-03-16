@@ -1,142 +1,133 @@
-#include <stdint.h>
-#include <stdbool.h>
+#include "kernel.h"
 
-// Memory management for AuroraOS
-#define MEMORY_SIZE 64 * 1024 * 1024  // 64MB
-#define PAGE_SIZE 4096
-#define MAX_PAGES (MEMORY_SIZE / PAGE_SIZE)
+/* ═══════════════════════════════════════════════════════════════════
+   MEMORY  MANAGER
+   – Page bitmap allocator  (4 KB pages)
+   – Heap  (first-fit, coalescing free)
+   ═══════════════════════════════════════════════════════════════════ */
 
-// Memory bitmap for allocation tracking
-uint8_t memory_bitmap[MAX_PAGES / 8];
-uint32_t total_allocated = 0;
+/* ── Page allocator ────────────────────────────────────────────────── */
+#define MAX_MEM_MB   256
+#define MAX_PAGES    ((MAX_MEM_MB * 1024 * 1024) / PAGE_SIZE)
+#define BITMAP_WORDS ((MAX_PAGES + 31) / 32)
 
-// Initialize memory management
-void init_memory() {
-    // Clear bitmap
-    for (int i = 0; i < sizeof(memory_bitmap); i++) {
-        memory_bitmap[i] = 0;
+static uint32_t page_bitmap[BITMAP_WORDS];
+static uint32_t total_pages  = 0;
+static uint32_t used_pages   = 0;
+
+static void bitmap_set(uint32_t page) {
+    page_bitmap[page / 32] |= (1u << (page % 32));
+}
+static void bitmap_clear(uint32_t page) {
+    page_bitmap[page / 32] &= ~(1u << (page % 32));
+}
+static bool bitmap_test(uint32_t page) {
+    return (page_bitmap[page / 32] >> (page % 32)) & 1;
+}
+
+void mem_init(uint32_t mem_upper_kb) {
+    kmemset(page_bitmap, 0xFF, sizeof(page_bitmap)); /* all used */
+    uint32_t total_kb = mem_upper_kb + 1024; /* lower 1 MB + upper */
+    total_pages = (total_kb * 1024) / PAGE_SIZE;
+    if (total_pages > MAX_PAGES) total_pages = MAX_PAGES;
+
+    /* Free pages above 1 MB (kernel lives in first 4 MB) */
+    uint32_t free_start = (4 * 1024 * 1024) / PAGE_SIZE;
+    for (uint32_t i = free_start; i < total_pages; i++) {
+        bitmap_clear(i);
     }
-
-    // Mark kernel area as used (first 1MB)
-    for (int i = 0; i < (1024 * 1024) / PAGE_SIZE; i++) {
-        set_page_used(i);
-    }
+    used_pages = free_start;
 }
 
-// Set a page as used
-void set_page_used(int page) {
-    int byte = page / 8;
-    int bit = page % 8;
-    memory_bitmap[byte] |= (1 << bit);
-}
-
-// Set a page as free
-void set_page_free(int page) {
-    int byte = page / 8;
-    int bit = page % 8;
-    memory_bitmap[byte] &= ~(1 << bit);
-}
-
-// Check if a page is used
-bool is_page_used(int page) {
-    int byte = page / 8;
-    int bit = page % 8;
-    return (memory_bitmap[byte] & (1 << bit)) != 0;
-}
-
-// Allocate a page
-void* allocate_page() {
-    for (int i = 0; i < MAX_PAGES; i++) {
-        if (!is_page_used(i)) {
-            set_page_used(i);
-            total_allocated += PAGE_SIZE;
-            return (void*)(i * PAGE_SIZE);
+void *page_alloc(void) {
+    for (uint32_t i = 0; i < total_pages; i++) {
+        if (!bitmap_test(i)) {
+            bitmap_set(i);
+            used_pages++;
+            return (void *)(i * PAGE_SIZE);
         }
     }
-    return NULL; // Out of memory
+    return 0;
 }
 
-// Free a page
-void free_page(void* addr) {
-    int page = (uint32_t)addr / PAGE_SIZE;
-    if (is_page_used(page)) {
-        set_page_free(page);
-        total_allocated -= PAGE_SIZE;
+void page_free(void *addr) {
+    uint32_t page = (uint32_t)addr / PAGE_SIZE;
+    if (page < total_pages && bitmap_test(page)) {
+        bitmap_clear(page);
+        used_pages--;
     }
 }
 
-// Simple heap allocator
-#define HEAP_START 0x200000  // 2MB
-#define HEAP_SIZE (16 * 1024 * 1024)  // 16MB heap
+/* ── Heap allocator ────────────────────────────────────────────────── */
+typedef struct block_hdr {
+    uint32_t         magic;
+    uint32_t         size;      /* payload size */
+    bool             free;
+    struct block_hdr *next;
+    struct block_hdr *prev;
+} block_hdr_t;
 
-typedef struct block_header {
-    uint32_t size;
-    bool free;
-    struct block_header* next;
-} block_header_t;
+#define HEAP_MAGIC  0xA0A0A0A0u
+static block_hdr_t *heap_head = 0;
+static bool heap_ready = 0;
 
-block_header_t* heap_start = (block_header_t*)HEAP_START;
-bool heap_initialized = false;
-
-// Initialize heap
-void init_heap() {
-    heap_start->size = HEAP_SIZE - sizeof(block_header_t);
-    heap_start->free = true;
-    heap_start->next = NULL;
-    heap_initialized = true;
+static void heap_init(void) {
+    heap_head = (block_hdr_t *)HEAP_START;
+    heap_head->magic = HEAP_MAGIC;
+    heap_head->size  = HEAP_SIZE - sizeof(block_hdr_t);
+    heap_head->free  = true;
+    heap_head->next  = 0;
+    heap_head->prev  = 0;
+    heap_ready = true;
 }
 
-// Allocate memory from heap
-void* malloc(uint32_t size) {
-    if (!heap_initialized) {
-        init_heap();
-    }
+void *kmalloc(size_t size) {
+    if (!heap_ready) heap_init();
+    if (!size) return 0;
+    /* Align to 8 bytes */
+    size = (size + 7) & ~7u;
 
-    block_header_t* current = heap_start;
-    while (current) {
-        if (current->free && current->size >= size + sizeof(block_header_t)) {
-            // Split block if large enough
-            if (current->size > size + sizeof(block_header_t) + sizeof(block_header_t)) {
-                block_header_t* new_block = (block_header_t*)((uint32_t)current + sizeof(block_header_t) + size);
-                new_block->size = current->size - size - sizeof(block_header_t);
-                new_block->free = true;
-                new_block->next = current->next;
-                current->next = new_block;
-                current->size = size;
-            }
-            current->free = false;
-            return (void*)((uint32_t)current + sizeof(block_header_t));
+    for (block_hdr_t *b = heap_head; b; b = b->next) {
+        if (!b->free || b->size < size) continue;
+        /* Split if remainder is large enough */
+        if (b->size >= size + sizeof(block_hdr_t) + 16) {
+            block_hdr_t *nb = (block_hdr_t *)((uint8_t *)b + sizeof(block_hdr_t) + size);
+            nb->magic = HEAP_MAGIC;
+            nb->size  = b->size - size - sizeof(block_hdr_t);
+            nb->free  = true;
+            nb->next  = b->next;
+            nb->prev  = b;
+            if (b->next) b->next->prev = nb;
+            b->next = nb;
+            b->size = size;
         }
-        current = current->next;
+        b->free = false;
+        return (uint8_t *)b + sizeof(block_hdr_t);
     }
-    return NULL; // Out of memory
+    return 0; /* OOM */
 }
 
-// Free memory
-void free(void* ptr) {
+void kfree(void *ptr) {
     if (!ptr) return;
-
-    block_header_t* block = (block_header_t*)((uint32_t)ptr - sizeof(block_header_t));
-    block->free = true;
-
-    // Merge with next block if free
-    if (block->next && block->next->free) {
-        block->size += sizeof(block_header_t) + block->next->size;
-        block->next = block->next->next;
+    block_hdr_t *b = (block_hdr_t *)((uint8_t *)ptr - sizeof(block_hdr_t));
+    if (b->magic != HEAP_MAGIC) return;
+    b->free = true;
+    /* Coalesce with next */
+    if (b->next && b->next->free) {
+        b->size += sizeof(block_hdr_t) + b->next->size;
+        b->next  = b->next->next;
+        if (b->next) b->next->prev = b;
     }
-
-    // Merge with previous block (simplified - would need doubly linked list)
+    /* Coalesce with prev */
+    if (b->prev && b->prev->free) {
+        b->prev->size += sizeof(block_hdr_t) + b->size;
+        b->prev->next  = b->next;
+        if (b->next) b->next->prev = b->prev;
+    }
 }
 
-// Get memory statistics
-uint32_t get_total_memory() {
-    return MEMORY_SIZE;
-}
-
-uint32_t get_used_memory() {
-    return total_allocated;
-}
-
-uint32_t get_free_memory() {
-    return MEMORY_SIZE - total_allocated;
+void mem_stats(uint32_t *total, uint32_t *used, uint32_t *free_bytes) {
+    *total = total_pages * PAGE_SIZE;
+    *used  = used_pages  * PAGE_SIZE;
+    *free_bytes = (total_pages - used_pages) * PAGE_SIZE;
 }

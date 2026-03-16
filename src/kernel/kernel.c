@@ -1,54 +1,106 @@
-#include <stdint.h>
+#include "kernel.h"
 
-// Forward declarations
-void shell_main();
-void init_keyboard();
-void init_memory();
-void vfs_init();
-void scheduler_init();
-void desktop_init();
-void services_init();
-void packages_init();
+/* ── Multiboot info structure (partial) ────────────────────────────── */
+#define MULTIBOOT_MAGIC_VALUE 0x2BADB002
 
-// Simple kernel entry point
-void kernel_main() {
-    // Clear screen
-    volatile char *video = (volatile char*)0xB8000;
-    for (int i = 0; i < 80*25*2; i++) {
-        video[i] = 0;
+typedef struct {
+    uint32_t flags;
+    uint32_t mem_lower;
+    uint32_t mem_upper;
+    /* ... more fields we don't need right now */
+} multiboot_info_t;
+
+/* ── Global settings ───────────────────────────────────────────────── */
+aurora_settings_t g_settings;
+
+/* ── Boot banner ───────────────────────────────────────────────────── */
+static void print_banner(void) {
+    term_setcolor(VGA_COLOR(VGA_LIGHT_CYAN, VGA_BLACK));
+    term_writeln("  ___                           ___  ____  ");
+    term_writeln(" / _ \\ _   _ _ __ ___  _ __ __ _/ _ \\/ ___| ");
+    term_writeln("| | | | | | | '__/ _ \\| '__/ _` | | | \\___ \\ ");
+    term_writeln("| |_| | |_| | | | (_) | | | (_| | |_| |___) |");
+    term_writeln(" \\___/ \\__,_|_|  \\___/|_|  \\__,_|\\___/|____/ ");
+    term_setcolor(VGA_COLOR(VGA_LIGHT_GREEN, VGA_BLACK));
+    term_writeln("  Research-Level Operating System  v2.0");
+    term_writeln("  Activity-Centric | Semantic FS | AuroraLang");
+    term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+    term_writeln("─────────────────────────────────────────────────────────────────────────────────");
+}
+
+static void boot_step(const char *msg) {
+    term_setcolor(VGA_COLOR(VGA_LIGHT_GREEN, VGA_BLACK));
+    term_write("  [ OK ] ");
+    term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+    term_writeln(msg);
+    timeline_record("kernel", msg);
+}
+
+/* ── Kernel entry point ────────────────────────────────────────────── */
+void kernel_main(uint32_t magic, void *mbi) {
+    /* 1. Terminal first so we can print */
+    term_init();
+    term_clear();
+    print_banner();
+
+    /* 2. Validate multiboot */
+    uint32_t mem_upper_kb = 64 * 1024; /* default 64 MB */
+    if (magic == MULTIBOOT_MAGIC_VALUE && mbi) {
+        multiboot_info_t *info = (multiboot_info_t *)mbi;
+        if (info->flags & 0x1)
+            mem_upper_kb = info->mem_upper;
     }
 
-    // Print welcome message
-    const char *msg = "AuroraOS Kernel v1.0 - Initializing systems...";
-    volatile char *screen = (volatile char*)0xB8000;
-    for (int i = 0; msg[i] != '\0'; i++) {
-        screen[i*2] = msg[i];
-        screen[i*2+1] = 0x07; // White on black
-    }
+    /* 3. Core subsystems */
+    timeline_init();
+    boot_step("Timeline subsystem initialized");
 
-    // Initialize core systems
-    init_memory();
-    init_keyboard();
+    mem_init(mem_upper_kb);
+    boot_step("Memory manager initialized");
+
+    idt_init();
+    pic_init();
+    boot_step("Interrupt descriptor table loaded");
+
+    timer_init(100);   /* 100 Hz tick */
+    boot_step("System timer started (100 Hz)");
+
+    keyboard_init();
+    boot_step("PS/2 keyboard driver loaded");
+
+    /* 4. File system */
     vfs_init();
-    scheduler_init();
-    services_init();
-    packages_init();
+    boot_step("Semantic virtual file system mounted");
 
-    // Print ready message
-    const char *ready_msg = "AuroraOS Kernel v1.0 - System Ready.";
-    for (int i = 0; ready_msg[i] != '\0'; i++) {
-        screen[(1 * 80 + i) * 2] = ready_msg[i];
-        screen[(1 * 80 + i) * 2 + 1] = 0x07;
-    }
+    /* 5. Scheduler */
+    sched_init();
+    boot_step("Process scheduler initialized");
 
-    // Initialize desktop
-    desktop_init();
+    /* 6. Activity workspace */
+    activity_init();
+    boot_step("Activity workspace engine ready");
 
-    // Start shell
+    /* 7. Settings */
+    settings_init();
+    boot_step("System settings loaded");
+
+    /* 8. AuroraLang runtime */
+    aurora_runtime_init();
+    boot_step("AuroraLang runtime initialized");
+
+    /* 9. Enable interrupts */
+    sti();
+    boot_step("Interrupts enabled");
+
+    term_setcolor(VGA_COLOR(VGA_LIGHT_CYAN, VGA_BLACK));
+    term_writeln("\n  AuroraOS is ready. Type 'help' to explore.\n");
+    term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+
+    timeline_record("kernel", "Boot complete — entering shell");
+
+    /* 10. Hand off to shell */
     shell_main();
 
-    // Infinite loop (should not reach here)
-    while (1) {
-        __asm__ volatile("hlt");
-    }
+    /* Should never return */
+    for (;;) __asm__ volatile("hlt");
 }
