@@ -17,6 +17,8 @@ void vfs_read_file(const char *path);
 void scheduler_list_processes();
 uint32_t sched_spawn(const char *name, uint32_t priority, uint32_t host_pid);
 void desktop_show_info();
+void desktop_list_nodes();
+void desktop_connect_nodes(int id1, int id2);
 void services_log_message(const char *message);
 void packages_list_installed();
 void packages_install(const char *package_name);
@@ -54,6 +56,8 @@ void cmd_services(int argc, char *argv[]);
 void cmd_packages(int argc, char *argv[]);
 void cmd_install(int argc, char *argv[]);
 void cmd_symspawn(int argc, char *argv[]);
+void cmd_lsnodes(int argc, char *argv[]);
+void cmd_connect(int argc, char *argv[]);
 
 // Command table
 command_t commands[] = {
@@ -75,6 +79,8 @@ command_t commands[] = {
     {"packages", "List installed packages", cmd_packages},
     {"install", "Install package", cmd_install},
     {"symspawn", "Spawn a symbiote process: symspawn <host_pid> <name>", cmd_symspawn},
+    {"lsnodes", "List all UI nodes on the desktop canvas", cmd_lsnodes},
+    {"connect", "Connect two UI nodes: connect <id1> <id2>", cmd_connect},
     {NULL, NULL, NULL}
 };
 
@@ -276,6 +282,23 @@ void cmd_symspawn(int argc, char *argv[]) {
         print_string("' with PID ", 19 + strlen(name), 1, 0x07);
         print_number(pid, 19 + strlen(name) + 11, 1);
     }
+}
+
+void cmd_lsnodes(int argc, char *argv[]) {
+    print_string("UI Nodes on Canvas:", 0, 1, 0x07);
+    desktop_list_nodes();
+}
+
+void cmd_connect(int argc, char *argv[]) {
+    if (argc < 3) {
+        print_string("Usage: connect <node_id_1> <node_id_2>", 0, 1, 0x07);
+        return;
+    }
+    int id1 = atoi(argv[1]);
+    int id2 = atoi(argv[2]);
+    desktop_connect_nodes(id1, id2);
+    print_string("Connected node ", 0, 1, 0x07);
+    print_string(argv[1], 16, 1, 0x07);
 }
 
 // Shell main loop

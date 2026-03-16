@@ -19,9 +19,16 @@ typedef enum {
     TYPE_COLOR
 } var_type_t;
 
+#define MAX_VAR_HISTORY 16
+typedef struct {
+    uint32_t timestamp;
+    int int_val;
+} var_history_t;
+
 typedef struct {
     char name[32];
     var_type_t type;
+    bool is_temporal;
     union {
         int int_val;
         char* str_val;
@@ -29,6 +36,8 @@ typedef struct {
         bool bool_val;
         uint32_t color_val;
     } value;
+    var_history_t history[MAX_VAR_HISTORY];
+    int history_count;
 } variable_t;
 
 variable_t variables[MAX_VARS];
@@ -97,16 +106,25 @@ int find_variable(const char *name) {
     return -1;
 }
 
-void set_variable_int(const char *name, int value) {
+void set_variable_int(const char *name, int value, bool is_temporal_decl) {
     int idx = find_variable(name);
     if (idx == -1) {
         if (var_count < MAX_VARS) {
-            strcpy(variables[var_count].name, name);
-            variables[var_count].type = TYPE_INT;
-            variables[var_count].value.int_val = value;
+            idx = var_count;
+            strcpy(variables[idx].name, name);
+            variables[idx].type = TYPE_INT;
+            variables[idx].value.int_val = value;
+            variables[idx].is_temporal = is_temporal_decl;
+            variables[idx].history_count = 0;
             var_count++;
         }
     } else {
+        // If it's a temporal variable, save its current state to history
+        if (variables[idx].is_temporal && variables[idx].history_count < MAX_VAR_HISTORY) {
+            int hist_idx = variables[idx].history_count++;
+            variables[idx].history[hist_idx].timestamp = 0; // TODO: Get from kernel timer
+            variables[idx].history[hist_idx].int_val = variables[idx].value.int_val;
+        }
         variables[idx].value.int_val = value;
     }
 }
@@ -354,14 +372,17 @@ void run_auroralang(const char *filename) {
     // New program demonstrates semantic scopes
     char *program[] = {
         "print \"Hello AuroraOS\"",
-        "x = 10",
+        "temporal x = 10",
+        "print \"x is now 10\"",
+        "x = 25",
+        "print \"x is now 25\"",
+        "x = 50",
+        "print \"x is now 50\"",
         "print \"Entering UI update scope...\"",
         "scope ui_update {",
         "  print \"  Batching this update...\"",
-        "  y = 20",
         "}",
         "print \"Exited scope. UI would now be redrawn.\"",
-        "print y",
         NULL
     };
 
@@ -508,7 +529,9 @@ void parse_assignment(char *line) {
         } else {
             // Integer assignment with expressions
             int value = evaluate_expression(expr);
-            set_variable_int(var_name, value);
+            bool is_temporal = strstr(line, "temporal") != NULL;
+            if(is_temporal) var_name = strstr(var_name, "temporal") + 9;
+            set_variable_int(var_name, value, is_temporal);
         }
     }
 }

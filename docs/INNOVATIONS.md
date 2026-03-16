@@ -37,3 +37,33 @@ scope ui_update {
 
 ### Uniqueness
 This extends the concept of `using` (C#) or `try-with-resources` (Java) to be more generic and declarative. Instead of being tied to a specific class or interface, it's a general language construct. The behavior of a scope type (e.g., `ui_update`, `database_transaction`, `no_interrupts`) is defined by the runtime or a library, making it highly extensible. This allows developers to write cleaner, more intention-revealing code while the language handles the complex underlying mechanics.
+
+## 3. Fluid Interface (Operating System)
+
+### Concept
+The Fluid Interface is a UI paradigm that moves beyond discrete, overlapping windows. The entire desktop is a single, zoomable, and pannable canvas where UI components (editors, terminals, monitors) exist as "nodes."
+
+Users can visually draw connections between these nodes to establish explicit data and control flows.
+
+- **Visual Linking**: Connect a file browser node to an image viewer node. Clicking an image file in the browser opens it in the linked viewer.
+- **Data Flow**: Connect a compiler node's output to a log viewer node to see build messages in real-time.
+- **Composition**: Group related nodes into a super-node, which can be collapsed or expanded, forming a tangible "activity."
+
+### Uniqueness
+This paradigm treats the user's workflow as a form of visual, data-flow programming. It's inspired by node-based editors in creative software but applied to the entire operating system interface. It makes the relationships between tools explicit and manipulable, offering a more intuitive and powerful way to manage complex tasks than traditional desktops or tiling window managers. It is the visual manifestation of **Process Symbiosis**.
+
+## 4. Temporal Types (AuroraLang)
+
+### Concept
+Temporal Types are a language feature that makes a variable's history a first-class citizen. By declaring a variable with the `temporal` keyword, its entire history of values is tracked by the runtime and can be queried directly.
+
+### Syntax
+```auroralang
+temporal let sensor_reading = 0;
+
+// Later, you can query its past state
+let old_value = get_past("sensor_reading", 10); // Get value from 10 seconds ago
+```
+
+### Uniqueness
+While some databases have temporal features, building this concept directly into a general-purpose language is novel. It's not just for debugging; it's a core state management primitive. This can be used for building powerful reactive UIs, simulations, and fault-tolerant systems with native "undo" capabilities. It provides a concrete implementation mechanism for the OS's **Time-Travel Debugging** and **System Timeline** features.
