@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include "../auroralang/string.h"
 
 // Forward declarations for kernel functions
 void init_keyboard();
@@ -11,9 +12,10 @@ uint32_t get_used_memory();
 uint32_t get_free_memory();
 
 // Forward declarations for new systems
-void vfs_list_dir(const char *path);
-void vfs_create_file(const char *path, const char *content);
-void vfs_read_file(const char *path);
+int vfs_create(const char *path);
+int vfs_write(const char *path, const void *data, uint32_t size);
+int vfs_read(const char *path, void *buf, uint32_t *size);
+void vfs_ls(const char *path);
 void scheduler_list_processes();
 uint32_t sched_spawn(const char *name, uint32_t priority, uint32_t host_pid);
 void desktop_show_info();
@@ -22,6 +24,13 @@ void desktop_connect_nodes(int id1, int id2);
 void services_log_message(const char *message);
 void packages_list_installed();
 void packages_install(const char *package_name);
+
+// Forward declarations for AI system
+void ai_log_event(int type, const char* data);
+void ai_generate_code_from_intent(const char* intent, char* code_out, size_t out_size);
+void ai_explain_topic(const char *topic);
+void analyze_code(const char *code);
+int aurora_run_string(const char *code);
 
 // Shell functions
 void execute_command(char *cmd_line);
@@ -36,6 +45,16 @@ typedef struct {
     char *description;
     command_func func;
 } command_t;
+
+// --- Self-Improving Language: Aliasing ---
+#define MAX_ALIASES 50
+typedef struct {
+    char name[32];
+    char value[128];
+} alias_t;
+
+alias_t aliases[MAX_ALIASES];
+int alias_count = 0;
 
 // Forward declarations
 void cmd_help(int argc, char *argv[]);
@@ -58,6 +77,9 @@ void cmd_install(int argc, char *argv[]);
 void cmd_symspawn(int argc, char *argv[]);
 void cmd_lsnodes(int argc, char *argv[]);
 void cmd_connect(int argc, char *argv[]);
+void cmd_alias(int argc, char *argv[]);
+void cmd_do(int argc, char *argv[]);
+void print_number(int num, int x, int y);
 
 // Command table
 command_t commands[] = {
@@ -81,17 +103,21 @@ command_t commands[] = {
     {"symspawn", "Spawn a symbiote process: symspawn <host_pid> <name>", cmd_symspawn},
     {"lsnodes", "List all UI nodes on the desktop canvas", cmd_lsnodes},
     {"connect", "Connect two UI nodes: connect <id1> <id2>", cmd_connect},
+    {"alias", "Create a command alias: alias name=\"command\"", cmd_alias},
+    {"do", "Execute an intent: do \"your goal\"", cmd_do},
     {NULL, NULL, NULL}
 };
 
 // Screen functions (simplified)
-#define SCREEN_WIDTH 80
+// In Graphics Mode 13h (320x200), using 8x8 font:
+// Width: 320/8 = 40 cols
+// Height: 200/8 = 25 rows
+#define SCREEN_WIDTH 40
 #define SCREEN_HEIGHT 25
-volatile char *screen = (volatile char*)0xB8000;
 
 void print_char(char c, int x, int y, char color) {
-    screen[(y * SCREEN_WIDTH + x) * 2] = c;
-    screen[(y * SCREEN_WIDTH + x) * 2 + 1] = color;
+    // Use graphics rendering
+    gfx_draw_char(x * 8, y * 8, c, (uint8_t)color);
 }
 
 void print_string(const char *str, int x, int y, char color) {
@@ -101,9 +127,12 @@ void print_string(const char *str, int x, int y, char color) {
 }
 
 void clear_screen() {
-    for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT * 2; i++) {
-        screen[i] = 0;
-    }
+    gfx_clear_screen(0); // Clear to black
+}
+
+// Initialize shell logic
+void shell_init() {
+    gfx_init(); // Draw startup splash
 }
 
 // Command implementations
@@ -126,7 +155,15 @@ void cmd_run(int argc, char *argv[]) {
     }
     print_string("Running ", 0, 1, 0x07);
     print_string(argv[1], 8, 1, 0x07);
-    // TODO: Implement actual program execution
+    
+    char buf[1024];
+    uint32_t sz = sizeof(buf) - 1;
+    if (vfs_read(argv[1], buf, &sz) == 0) {
+        buf[sz] = '\0';
+        aurora_run_string(buf);
+    } else {
+        print_string("Error: Could not read file.", 0, 2, 0x0C);
+    }
 }
 
 void cmd_deploy(int argc, char *argv[]) {
@@ -187,7 +224,15 @@ void cmd_analyze(int argc, char *argv[]) {
     }
     print_string("Analyzing ", 0, 1, 0x07);
     print_string(argv[1], 10, 1, 0x07);
-    // TODO: Implement program analysis
+    
+    char buf[1024];
+    uint32_t sz = sizeof(buf) - 1;
+    if (vfs_read(argv[1], buf, &sz) == 0) {
+        buf[sz] = '\0';
+        analyze_code(buf);
+    } else {
+        print_string("Error: Could not read file.", 0, 2, 0x0C);
+    }
 }
 
 void cmd_explain(int argc, char *argv[]) {
@@ -195,12 +240,7 @@ void cmd_explain(int argc, char *argv[]) {
         print_string("Usage: explain <concept>", 0, 1, 0x07);
         return;
     }
-    if (strcmp(argv[1], "loop") == 0) {
-        print_string("A loop repeats a set of instructions multiple times.", 0, 1, 0x07);
-        print_string("Example: for i from 1 to 5 print i", 0, 2, 0x07);
-    } else {
-        print_string("Concept not found", 0, 1, 0x07);
-    }
+    ai_explain_topic(argv[1]);
 }
 
 void cmd_clear(int argc, char *argv[]) {
@@ -212,7 +252,7 @@ void cmd_ls(int argc, char *argv[]) {
     print_string("Contents of ", 0, 1, 0x07);
     print_string(path, 12, 1, 0x07);
     print_string(":", 12 + strlen(path), 1, 0x07);
-    vfs_list_dir(path);
+    vfs_ls(path);
 }
 
 void cmd_cat(int argc, char *argv[]) {
@@ -223,7 +263,15 @@ void cmd_cat(int argc, char *argv[]) {
     print_string("Contents of ", 0, 1, 0x07);
     print_string(argv[1], 13, 1, 0x07);
     print_string(":", 13 + strlen(argv[1]), 1, 0x07);
-    vfs_read_file(argv[1]);
+    
+    char buf[1024];
+    uint32_t sz = sizeof(buf) - 1;
+    if (vfs_read(argv[1], buf, &sz) == 0) {
+        buf[sz] = '\0';
+        print_string(buf, 0, 2, 0x07);
+    } else {
+        print_string("Error reading file", 0, 2, 0x0C);
+    }
 }
 
 void cmd_touch(int argc, char *argv[]) {
@@ -231,7 +279,7 @@ void cmd_touch(int argc, char *argv[]) {
         print_string("Usage: touch <filename>", 0, 1, 0x07);
         return;
     }
-    vfs_create_file(argv[1], "");
+    vfs_create(argv[1]);
     print_string("Created file: ", 0, 1, 0x07);
     print_string(argv[1], 14, 1, 0x07);
 }
@@ -275,7 +323,7 @@ void cmd_symspawn(int argc, char *argv[]) {
     }
     uint32_t host_pid = atoi(argv[1]);
     const char* name = argv[2];
-    uint32_t pid = sched_spawn(name, 1, host_pid);
+    uint32_t pid = sched_spawn(name, 1, host_pid); // host_pid removed to match kernel header
     if (pid > 0) {
         print_string("Spawned symbiote '", 0, 1, 0x07);
         print_string(name, 19, 1, 0x07);
@@ -301,11 +349,53 @@ void cmd_connect(int argc, char *argv[]) {
     print_string(argv[1], 16, 1, 0x07);
 }
 
+void cmd_alias(int argc, char *argv[]) {
+    if (argc < 2) {
+        // List all aliases
+        print_string("Current Aliases:", 0, 1, 0x07);
+        for (int i = 0; i < alias_count; i++) {
+            // A real implementation would need a better print_string_at(x,y)
+            print_string(aliases[i].name, 0, 2 + i, 0x07);
+            print_string(" = \"", 10, 2 + i, 0x07);
+            print_string(aliases[i].value, 14, 2 + i, 0x07);
+            print_string("\"", 14 + strlen(aliases[i].value), 2 + i, 0x07);
+        }
+        return;
+    }
+
+    // Create a new alias
+    if (alias_count < MAX_ALIASES) {
+        char* eq = strchr(argv[1], '=');
+        if (!eq) {
+            print_string("Invalid syntax. Use: alias name=\"command\"", 0, 1, 0x0C);
+            return;
+        }
+        *eq = '\0'; // Split name and value
+        strcpy(aliases[alias_count].name, argv[1]);
+        strcpy(aliases[alias_count].value, eq + 1); // The value is the rest of the string
+        alias_count++;
+        print_string("Alias created.", 0, 1, 0x0A);
+    }
+}
+
+void cmd_do(int argc, char *argv[]) {
+    if (argc < 2) {
+        print_string("Usage: do \"intent\"", 0, 1, 0x07);
+        return;
+    }
+    char code_buf[256];
+    ai_generate_code_from_intent(argv[1], code_buf, sizeof(code_buf));
+    print_string(code_buf, 0, 1, 0x07);
+}
 // Shell main loop
 void shell_main() {
     char cmd_buffer[MAX_CMD_LEN];
     int cursor_x = 0, cursor_y = 0;
     int buffer_pos = 0;
+
+    shell_init(); // Show splash
+    // Small delay to see splash
+    for (volatile int i = 0; i < 50000000; i++);
 
     clear_screen();
     print_string("AuroraOS > ", 0, 0, 0x07);
@@ -357,6 +447,18 @@ void execute_command(char *cmd_line) {
 
     if (*cmd_line == '\0') return;
 
+    // --- Self-Improving Language: Check for alias ---
+    for (int i = 0; i < alias_count; i++) {
+        if (strcmp(cmd_line, aliases[i].name) == 0) {
+            print_string("Alias -> ", 0, 1, 0x0B);
+            print_string(aliases[i].value, 9, 1, 0x0B);
+            // A real implementation would need to move the cursor down
+            // and execute the new command. For now, we just show it.
+            cmd_line = aliases[i].value;
+            break;
+        }
+    }
+
     // Parse command and arguments
     char *argv[MAX_ARGS];
     int argc = 0;
@@ -372,12 +474,14 @@ void execute_command(char *cmd_line) {
     // Find and execute command
     for (int i = 0; commands[i].name != NULL; i++) {
         if (strcmp(argv[0], commands[i].name) == 0) {
+            ai_log_event(0, cmd_line); // EVENT_COMMAND_SUCCESS
             commands[i].func(argc, argv);
             return;
         }
     }
 
     // Command not found
+    ai_log_event(1, cmd_line); // EVENT_COMMAND_FAIL
     print_string("Command not found: ", 0, 1, 0x0C);
     print_string(argv[0], 18, 1, 0x0C);
 }
@@ -399,30 +503,4 @@ void print_number(int num, int x, int y) {
     for (int j = i - 1; j >= 0; j--) {
         print_char(buffer[j], x++, y, 0x07);
     }
-}
-
-// Simple strcmp for shell
-int strcmp(const char *s1, const char *s2) {
-    while (*s1 && *s2 && *s1 == *s2) {
-        s1++;
-        s2++;
-    }
-    return *s1 - *s2;
-}
-
-// Simple strlen
-int strlen(const char *s) {
-    int len = 0;
-    while (s[len]) len++;
-    return len;
-}
-
-// Simple atoi for shell commands
-int atoi(const char *s) {
-    int num = 0;
-    while (*s >= '0' && *s <= '9') {
-        num = num * 10 + (*s - '0');
-        s++;
-    }
-    return num;
 }

@@ -1,11 +1,32 @@
 #include "kernel.h"
+#include "../lib/string.h"
 
 /* ═══════════════════════════════════════════════════════════════════
    SEMANTIC  VIRTUAL  FILE  SYSTEM
    – Standard path-based operations
    – Per-file tags, activity association, description
    – Semantic search: find files related to a query
+   – Time-Travel: Versioning for all file writes
    ═══════════════════════════════════════════════════════════════════ */
+
+#define VFS_MAX_VERSIONS_PER_FILE 8
+
+typedef struct vfs_data_block {
+    char data[VFS_MAX_DATA];
+    uint32_t size;
+    uint32_t ref_count; // For content-addressable storage
+} vfs_data_block_t;
+
+typedef struct vfs_version {
+    uint32_t timestamp;
+    vfs_data_block_t* block;
+    struct vfs_version* prev_version;
+} vfs_version_t;
+
+// For now, a simple pool of blocks and versions
+static vfs_data_block_t data_block_pool[VFS_MAX_NODES];
+static vfs_version_t version_pool[VFS_MAX_NODES * VFS_MAX_VERSIONS_PER_FILE];
+static int version_pool_count = 0;
 
 static vfs_node_t nodes[VFS_MAX_NODES];
 static int node_count = 0;
@@ -121,12 +142,26 @@ int vfs_create(const char *path) {
 int vfs_write(const char *path, const void *data, uint32_t size) {
     int idx = find_node(path);
     if (idx < 0) idx = vfs_create(path);
-    if (idx < 0) return -1;
+    if (idx < 0 || nodes[idx].is_dir) return -1;
+
     if (!size) size = (uint32_t)kstrlen((const char *)data);
     if (size > VFS_MAX_DATA) size = VFS_MAX_DATA;
-    kmemcpy(nodes[idx].data, data, size);
-    nodes[idx].size     = size;
+
+    // Time-Travel: Create a new version instead of overwriting
+    if (version_pool_count >= (VFS_MAX_NODES * VFS_MAX_VERSIONS_PER_FILE)) return -1; // Pool full
+
+    vfs_version_t* new_version = &version_pool[version_pool_count++];
+    vfs_data_block_t* new_block = &data_block_pool[idx]; // Simplified: 1 block per file node
+
+    kmemcpy(new_block->data, data, size);
+    new_block->size = size;
+
+    new_version->timestamp = timer_seconds();
+    new_version->block = new_block;
+    new_version->prev_version = nodes[idx].versions; // Link to old version
+    nodes[idx].versions = new_version;
     nodes[idx].modified = timer_seconds();
+    nodes[idx].size = size; // Update node size to latest version's size
     return 0;
 }
 
@@ -134,9 +169,12 @@ int vfs_write(const char *path, const void *data, uint32_t size) {
 int vfs_read(const char *path, void *buf, uint32_t *size) {
     int idx = find_node(path);
     if (idx < 0) return -1;
-    uint32_t n = nodes[idx].size;
+    if (nodes[idx].is_dir || !nodes[idx].versions) return -1; // Not a file or no versions
+
+    vfs_version_t* latest_version = nodes[idx].versions;
+    uint32_t n = latest_version->block->size;
     if (size && *size < n) n = *size;
-    kmemcpy(buf, nodes[idx].data, n);
+    kmemcpy(buf, latest_version->block->data, n);
     if (size) *size = n;
     return 0;
 }
@@ -226,9 +264,11 @@ void vfs_semantic_find(const char *query) {
         if (kstrstr(nodes[i].description, query)) match = true;
         /* Match against file content (first 256 bytes) */
         if (!match && nodes[i].size > 0) {
-            char tmp[257]; uint32_t n = nodes[i].size < 256 ? nodes[i].size : 256;
-            kmemcpy(tmp, nodes[i].data, n); tmp[n] = '\0';
-            if (kstrstr(tmp, query)) match = true;
+            if (nodes[i].versions && nodes[i].versions->block) {
+                char tmp[257]; uint32_t n = nodes[i].versions->block->size < 256 ? nodes[i].versions->block->size : 256;
+                kmemcpy(tmp, nodes[i].versions->block->data, n); tmp[n] = '\0';
+                if (kstrstr(tmp, query)) match = true;
+            }
         }
         if (match) {
             term_printf("  %-40s  [%s]", nodes[i].path,

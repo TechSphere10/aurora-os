@@ -1,555 +1,427 @@
-#include <stdint.h>
-#include <stdbool.h>
-#include <stdlib.h>
+#include "auroralang.h"
+#include "string.h"
+#include "../kernel/kernel.h"
 
-// AuroraLang Interpreter - Enhanced with unique features
-#define MAX_LINE_LEN 256
-#define MAX_VARS 100
-#define MAX_CODE_LINES 1000
-#define MAX_FUNCTIONS 50
-#define MAX_UI_ELEMENTS 20
-#define MAX_SCOPE_DEPTH 10
+/* ═══════════════════════════════════════════════════════════════════
+   AURORALANG  –  AST-Walking Interpreter
+   ═══════════════════════════════════════════════════════════════════ */
 
-// Variable storage with types
-typedef enum {
-    TYPE_INT,
-    TYPE_STRING,
-    TYPE_FLOAT,
-    TYPE_BOOL,
-    TYPE_COLOR
-} var_type_t;
-
-#define MAX_VAR_HISTORY 16
-typedef struct {
-    uint32_t timestamp;
-    int int_val;
-} var_history_t;
-
-typedef struct {
-    char name[32];
-    var_type_t type;
-    bool is_temporal;
-    union {
-        int int_val;
-        char* str_val;
-        float float_val;
-        bool bool_val;
-        uint32_t color_val;
-    } value;
-    var_history_t history[MAX_VAR_HISTORY];
-    int history_count;
-} variable_t;
-
-variable_t variables[MAX_VARS];
-int var_count = 0;
-
-// Function storage
-typedef struct {
-    char name[32];
-    char* code_lines[100];
-    int line_count;
-} function_t;
-
-function_t functions[MAX_FUNCTIONS];
-int func_count = 0;
-
-// UI Elements for visual programming
-typedef enum {
-    UI_WINDOW,
-    UI_BUTTON,
-    UI_TEXT,
-    UI_INPUT,
-    UI_CANVAS
-} ui_type_t;
-
-typedef struct {
-    char id[32];
-    ui_type_t type;
-    int x, y, width, height;
-    char text[64];
-    uint32_t color;
-    bool visible;
-} ui_element_t;
-
-ui_element_t ui_elements[MAX_UI_ELEMENTS];
-int ui_count = 0;
-
-// Live coding state
-bool live_mode = false;
-char* live_buffer[100];
-int live_line_count = 0;
-
-// Time travel debugging
-#define MAX_HISTORY 100
-char* execution_history[MAX_HISTORY];
-int history_count = 0;
-int current_step = -1;
-
-// Code storage
-char *code_lines[MAX_CODE_LINES];
-int code_line_count = 0;
-
-// Semantic Scopes
-#define MAX_SCOPE_NAME_LEN 32
-char semantic_scope_stack[MAX_SCOPE_DEPTH][MAX_SCOPE_NAME_LEN];
-int scope_depth = 0;
-
-void parse_scope(char *line);
-
-// Enhanced variable management
-int find_variable(const char *name) {
-    for (int i = 0; i < var_count; i++) {
-        if (strcmp(variables[i].name, name) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-void set_variable_int(const char *name, int value, bool is_temporal_decl) {
-    int idx = find_variable(name);
-    if (idx == -1) {
-        if (var_count < MAX_VARS) {
-            idx = var_count;
-            strcpy(variables[idx].name, name);
-            variables[idx].type = TYPE_INT;
-            variables[idx].value.int_val = value;
-            variables[idx].is_temporal = is_temporal_decl;
-            variables[idx].history_count = 0;
-            var_count++;
-        }
-    } else {
-        // If it's a temporal variable, save its current state to history
-        if (variables[idx].is_temporal && variables[idx].history_count < MAX_VAR_HISTORY) {
-            int hist_idx = variables[idx].history_count++;
-            variables[idx].history[hist_idx].timestamp = 0; // TODO: Get from kernel timer
-            variables[idx].history[hist_idx].int_val = variables[idx].value.int_val;
-        }
-        variables[idx].value.int_val = value;
+/* ── Environment / Scope Logic ───────────────────────────────────── */
+void env_push(env_stack_t *env) {
+    if (env->top < 15) {
+        env->top++;
+        env->scopes[env->top].count = 0;
+        env->scopes[env->top].parent_idx = env->top - 1;
     }
 }
 
-int get_variable_int(const char *name) {
-    int idx = find_variable(name);
-    return idx == -1 ? 0 : variables[idx].value.int_val;
-}
-
-// Function management
-int find_function(const char *name) {
-    for (int i = 0; i < func_count; i++) {
-        if (strcmp(functions[i].name, name) == 0) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-void define_function(const char *name, char* code[], int count) {
-    int idx = find_function(name);
-    if (idx == -1 && func_count < MAX_FUNCTIONS) {
-        strcpy(functions[func_count].name, name);
-        functions[func_count].line_count = count;
-        for (int i = 0; i < count; i++) {
-            functions[func_count].code_lines[i] = code[i];
-        }
-        func_count++;
+void env_pop(env_stack_t *env) {
+    if (env->top >= 0) {
+        env->top--;
     }
 }
 
-// Simple string functions
-int strcmp(const char *s1, const char *s2) {
-    while (*s1 && *s2 && *s1 == *s2) {
-        s1++;
-        s2++;
+void env_set(env_stack_t *env, const char *name, value_t val, bool is_new) {
+    // If not new, try to update existing variable in current or parent scopes
+    if (!is_new) {
+        if (env_assign(env, name, val)) return;
     }
-    return *s1 - *s2;
-}
-
-int strlen(const char *s) {
-    int len = 0;
-    while (s[len]) len++;
-    return len;
-}
-
-char *strcpy(char *dest, const char *src) {
-    char *d = dest;
-    while ((*d++ = *src++));
-    return dest;
-}
-
-char *strtok(char *str, const char *delim) {
-    static char *last = NULL;
-    if (str) last = str;
-    if (!last) return NULL;
-
-    char *start = last;
-    while (*last && !strchr(delim, *last)) last++;
-    if (*last) *last++ = '\0';
-    return start;
-}
-
-char *strchr(const char *s, int c) {
-    while (*s) {
-        if (*s == c) return (char*)s;
-        s++;
-    }
-    return NULL;
-}
-
-int atoi(const char *s) {
-    int num = 0;
-    while (*s >= '0' && *s <= '9') {
-        num = num * 10 + (*s - '0');
-        s++;
-    }
-    return num;
-}
-
-// Enhanced parsing with unique AuroraLang features
-void parse_visual(char *line) {
-    // Visual programming elements
-    if (strstr(line, "window")) {
-        // window "title" at x,y size w,h color #rrggbb
-        char title[32];
-        int x, y, w, h;
-        uint32_t color = 0xFFFFFF;
-        sscanf(line, "window \"%[^\"]\" at %d,%d size %d,%d color #%x", title, &x, &y, &w, &h, &color);
-
-        if (ui_count < MAX_UI_ELEMENTS) {
-            strcpy(ui_elements[ui_count].id, title);
-            ui_elements[ui_count].type = UI_WINDOW;
-            ui_elements[ui_count].x = x;
-            ui_elements[ui_count].y = y;
-            ui_elements[ui_count].width = w;
-            ui_elements[ui_count].height = h;
-            ui_elements[ui_count].color = color;
-            ui_elements[ui_count].visible = true;
-            strcpy(ui_elements[ui_count].text, title);
-            ui_count++;
-        }
-    } else if (strstr(line, "button")) {
-        // button "text" at x,y action function
-        char text[32], action[32];
-        int x, y;
-        sscanf(line, "button \"%[^\"]\" at %d,%d action %s", text, &x, &y, action);
-
-        if (ui_count < MAX_UI_ELEMENTS) {
-            sprintf(ui_elements[ui_count].id, "btn_%d", ui_count);
-            ui_elements[ui_count].type = UI_BUTTON;
-            ui_elements[ui_count].x = x;
-            ui_elements[ui_count].y = y;
-            ui_elements[ui_count].width = strlen(text) * 8 + 16;
-            ui_elements[ui_count].height = 20;
-            ui_elements[ui_count].color = 0x0080FF;
-            ui_elements[ui_count].visible = true;
-            strcpy(ui_elements[ui_count].text, text);
-            ui_count++;
-        }
-    } else if (strstr(line, "canvas")) {
-        // canvas "id" at x,y size w,h
-        char id[32];
-        int x, y, w, h;
-        sscanf(line, "canvas \"%[^\"]\" at %d,%d size %d,%d", id, &x, &y, &w, &h);
-
-        if (ui_count < MAX_UI_ELEMENTS) {
-            strcpy(ui_elements[ui_count].id, id);
-            ui_elements[ui_count].type = UI_CANVAS;
-            ui_elements[ui_count].x = x;
-            ui_elements[ui_count].y = y;
-            ui_elements[ui_count].width = w;
-            ui_elements[ui_count].height = h;
-            ui_elements[ui_count].color = 0x000000;
-            ui_elements[ui_count].visible = true;
-            ui_count++;
-        }
+    // Otherwise (or if not found), define in current scope
+    env_scope_t *s = &env->scopes[env->top];
+    if (s->count < 64) {
+        kstrcpy(s->vars[s->count].name, name);
+        s->vars[s->count].val = val;
+        s->count++;
     }
 }
 
-void parse_function(char *line) {
-    // function name() { ... }
-    char func_name[32];
-    if (sscanf(line, "function %s", func_name) == 1) {
-        // Start collecting function lines until }
-        // This is simplified - in real implementation would parse properly
-    }
-}
-
-void parse_live(char *line) {
-    // Live coding features
-    if (strstr(line, "live on")) {
-        live_mode = true;
-        // TODO: Enable live code modification
-    } else if (strstr(line, "live off")) {
-        live_mode = false;
-    }
-}
-
-void parse_debug(char *line) {
-    // Time travel debugging
-    if (strstr(line, "rewind")) {
-        if (current_step > 0) {
-            current_step--;
-            // Restore state from history
-        }
-    } else if (strstr(line, "step")) {
-        current_step++;
-        // Execute next step
-    }
-}
-
-void parse_ai(char *line) {
-    // AI-assisted features
-    if (strstr(line, "suggest")) {
-        // AI code suggestions
-        // TODO: Implement AI suggestions
-    } else if (strstr(line, "optimize")) {
-        // AI code optimization
-        // TODO: Implement optimization
-    }
-}
-
-// Main interpreter function with enhanced features
-void interpret_line(char *line) {
-    // Record in history for time travel debugging
-    if (history_count < MAX_HISTORY) {
-        execution_history[history_count++] = line;
-    }
-
-    // Skip comments
-    if (line[0] == '#' || (line[0] == '/' && line[1] == '/')) return;
-
-    parse_scope(line);
-
-    // Enhanced parsing
-    if (strncmp(line, "print", 5) == 0) {
-        parse_print(line);
-    } else if (strchr(line, '=')) {
-        parse_assignment(line);
-    } else if (strstr(line, "window") || strstr(line, "button") || strstr(line, "canvas")) {
-        parse_visual(line);
-    } else if (strncmp(line, "function", 8) == 0) {
-        parse_function(line);
-    } else if (strstr(line, "live")) {
-        parse_live(line);
-    } else if (strstr(line, "debug") || strstr(line, "rewind") || strstr(line, "step")) {
-        parse_debug(line);
-    } else if (strstr(line, "suggest") || strstr(line, "optimize")) {
-        parse_ai(line);
-    } else if (strncmp(line, "if", 2) == 0) {
-        parse_if(line);
-    } else if (strncmp(line, "for", 3) == 0) {
-        parse_for(line);
-    } else if (strstr(line, "animate") || strstr(line, "draw")) {
-        // Visual effects
-        parse_visual_effects(line);
-    }
-    // TODO: Add more statements
-}
-
-int strncmp(const char *s1, const char *s2, size_t n) {
-    while (n-- && *s1 && *s2 && *s1 == *s2) {
-        s1++;
-        s2++;
-    }
-    return n < 0 ? 0 : *s1 - *s2;
-}
-
-char *strstr(const char *haystack, const char *needle) {
-    size_t len = strlen(needle);
-    while (*haystack) {
-        if (strncmp(haystack, needle, len) == 0) {
-            return (char*)haystack;
-        }
-        haystack++;
-    }
-    return NULL;
-}
-
-// Load and run AuroraLang program
-void run_auroralang(const char *filename) {
-    // TODO: Load file from disk
-    // For now, hardcode a simple program
-    // New program demonstrates semantic scopes
-    char *program[] = {
-        "print \"Hello AuroraOS\"",
-        "temporal x = 10",
-        "print \"x is now 10\"",
-        "x = 25",
-        "print \"x is now 25\"",
-        "x = 50",
-        "print \"x is now 50\"",
-        "print \"Entering UI update scope...\"",
-        "scope ui_update {",
-        "  print \"  Batching this update...\"",
-        "}",
-        "print \"Exited scope. UI would now be redrawn.\"",
-        NULL
-    };
-
-    for (int i = 0; program[i]; i++) {
-        interpret_line(program[i]);
-    }
-}
-
-// Simple implementations for missing functions
-size_t strcspn(const char *s, const char *reject) {
-    const char *p = s;
-    while (*p) {
-        const char *r = reject;
-        while (*r) {
-            if (*p == *r) return p - s;
-            r++;
-        }
-        p++;
-    }
-    return p - s;
-}
-
-char *strpbrk(const char *s, const char *accept) {
-    while (*s) {
-        const char *a = accept;
-        while (*a) {
-            if (*s == *a) return (char*)s;
-            a++;
-        }
-        s++;
-    }
-    return NULL;
-}
-
-void parse_visual_effects(char *line) {
-    // Visual effects and animations
-    if (strstr(line, "animate")) {
-        // animate element property to value over time
-        // TODO: Implement animations
-    } else if (strstr(line, "draw")) {
-        // draw shape on canvas
-        // TODO: Implement drawing
-    }
-}
-
-// Placeholder for handling semantic scope actions
-void handle_semantic_scope(const char* scope_type, bool is_enter) {
-    if (is_enter) {
-        // This is where you would trigger the "on enter" logic
-        // For example, for a "ui_update" scope, you might call a kernel
-        // function to start batching graphics commands.
-        // print("Entering scope: "), print(scope_type);
-    } else {
-        // This is where you would trigger the "on exit" logic
-        // For a "ui_update" scope, you'd call the function to execute
-        // the batched commands and redraw the screen.
-        // print("Exiting scope: "), print(scope_type);
-    }
-}
-
-// Basic parser for semantic scopes
-void parse_scope(char *line) {
-    // Trim leading whitespace
-    char *start = line;
-    while (*start == ' ') start++;
-
-    // Check for scope entry: scope <type> {
-    if (strncmp(start, "scope ", 6) == 0) {
-        char *type_start = start + 6;
-        char *type_end = strchr(type_start, ' ');
-        if (type_end && strchr(type_end, '{')) {
-            *type_end = '\0';
-            if (scope_depth < MAX_SCOPE_DEPTH) {
-                strcpy(semantic_scope_stack[scope_depth], type_start);
-                handle_semantic_scope(semantic_scope_stack[scope_depth], true);
-                scope_depth++;
+bool env_get(env_stack_t *env, const char *name, value_t *out) {
+    int curr = env->top;
+    while (curr >= 0) {
+        env_scope_t *s = &env->scopes[curr];
+        for (int i = 0; i < s->count; i++) {
+            if (kstrcmp(s->vars[i].name, name) == 0) {
+                *out = s->vars[i].val;
+                return true;
             }
         }
-        // In a real parser, we'd consume the line here.
-        // For this simple interpreter, we'll just let it fall through.
+        curr--; // Check parent scope (simple stack approach)
     }
-    // Check for scope exit: }
-    else if (strcmp(start, "}") == 0) {
-        if (scope_depth > 0) {
-            scope_depth--;
-            handle_semantic_scope(semantic_scope_stack[scope_depth], false);
+    return false;
+}
+
+bool env_assign(env_stack_t *env, const char *name, value_t val) {
+    int curr = env->top;
+    while (curr >= 0) {
+        env_scope_t *s = &env->scopes[curr];
+        for (int i = 0; i < s->count; i++) {
+            if (kstrcmp(s->vars[i].name, name) == 0) {
+                s->vars[i].val = val;
+                return true;
+            }
         }
+        curr--;
     }
+    return false;
 }
 
-// Enhanced print with colors and positioning
-void parse_print(char *line) {
-    // Enhanced print: print "text" at x,y color #rrggbb
-    char text[128];
-    int x = -1, y = -1;
-    uint32_t color = 0xFFFFFF;
+/* ── Interpreter Init ────────────────────────────────────────────── */
+void interp_init(interp_t *it, ast_t *ast) {
+    kmemset(it, 0, sizeof(interp_t));
+    it->ast = ast;
+    env_push(&it->env); // Push global scope
+}
 
-    if (sscanf(line, "print \"%[^\"]\" at %d,%d color #%x", text, &x, &y, &color) == 4) {
-        // Positioned colored print
-        // TODO: Implement graphical printing
-    } else if (sscanf(line, "print \"%[^\"]\" color #%x", text, &color) == 2) {
-        // Colored print
-        // TODO: Implement colored text
-    } else if (strstr(line, "\"")) {
-        char *start = strchr(line, '"');
-        char *end = strchr(start + 1, '"');
-        if (end) {
-            *end = '\0';
-            // TODO: Print to screen
+/* ── Helper: Value to String ─────────────────────────────────────── */
+static void val_to_str(value_t *v, char *buf, int size) {
+    if (v->type == VAL_INT) kitoa(v->ival, buf, 10);
+    else if (v->type == VAL_FLOAT) {
+        int i = (int)v->fval;
+        int f = (int)((v->fval - (double)i) * 1000.0);
+        if (f < 0) f = -f;
+        char ib[32], fb[32]; kitoa(i, ib, 10); kitoa(f, fb, 10);
+        ksnprintf(buf, size, "%s.%s", ib, fb);
+    }
+    else if (v->type == VAL_STRING) kstrncpy(buf, v->sval, size - 1);
+    else if (v->type == VAL_BOOL) kstrcpy(buf, v->bval ? "true" : "false");
+    else kstrcpy(buf, "null");
+}
+
+/* ── Expression Evaluation ───────────────────────────────────────── */
+static value_t eval_expr(interp_t *it, int node_idx) {
+    ast_node_t *node = &it->ast->nodes[node_idx];
+    value_t result = { .type = VAL_NULL };
+
+    switch (node->type) {
+        case NODE_INT_LIT:
+            result.type = VAL_INT;
+            result.ival = node->ival;
+            break;
+        case NODE_STR_LIT:
+            result.type = VAL_STRING;
+            kstrcpy(result.sval, node->sval);
+            break;
+        case NODE_FLOAT_LIT:
+            result.type = VAL_FLOAT;
+            result.fval = node->fval;
+            break;
+        case NODE_BOOL_LIT:
+            result.type = VAL_BOOL;
+            result.bval = node->ival ? true : false;
+            break;
+        case NODE_NULL_LIT:
+            result.type = VAL_NULL;
+            break;
+            
+        case NODE_IDENT:
+            if (!env_get(&it->env, node->sval, &result)) {
+                result.type = VAL_ERROR;
+                ksnprintf(result.sval, sizeof(result.sval), "Undefined variable '%s'", node->sval);
+            }
+            break;
+        case NODE_BINOP: {
+            value_t left = eval_expr(it, node->children[0]);
+            value_t right = eval_expr(it, node->children[1]);
+            
+            if (left.type == VAL_ERROR) return left;
+            if (right.type == VAL_ERROR) return right;
+
+            // Operator: + (Addition and String Concatenation)
+            if (kstrcmp(node->sval, "+") == 0) {
+                // If either operand is a string, perform concatenation
+                if (left.type == VAL_STRING || right.type == VAL_STRING) {
+                    result.type = VAL_STRING;
+                    char lbuf[128], rbuf[128];
+                    val_to_str(&left, lbuf, sizeof(lbuf));
+                    val_to_str(&right, rbuf, sizeof(rbuf));
+
+                    // Concatenate safely
+                    kstrncpy(result.sval, lbuf, 128);
+                    if (kstrlen(result.sval) + kstrlen(rbuf) < 255) kstrcat(result.sval, rbuf);
+                } 
+                // Numeric Addition
+                else if (left.type == VAL_INT && right.type == VAL_INT) {
+                    result.type = VAL_INT;
+                    result.ival = left.ival + right.ival;
+                }
+                else {
+                    result.type = VAL_ERROR;
+                    kstrcpy(result.sval, "Invalid types for + operator");
+                }
+            }
+            // Operator: - (Subtraction)
+            else if (kstrcmp(node->sval, "-") == 0) {
+                if (left.type == VAL_INT && right.type == VAL_INT) {
+                    result.type = VAL_INT;
+                    result.ival = left.ival - right.ival;
+                }
+            }
+            // Operator: * (Multiplication)
+            else if (kstrcmp(node->sval, "*") == 0) {
+                if (left.type == VAL_INT && right.type == VAL_INT) {
+                    result.type = VAL_INT;
+                    result.ival = left.ival * right.ival;
+                }
+            }
+            // Operator: / (Division)
+            else if (kstrcmp(node->sval, "/") == 0) {
+                if (left.type == VAL_INT && right.type == VAL_INT) {
+                     if (right.ival == 0) {
+                        result.type = VAL_ERROR;
+                        kstrcpy(result.sval, "Division by zero");
+                     } else {
+                        result.type = VAL_INT;
+                        result.ival = left.ival / right.ival;
+                     }
+                }
+            }
+            // Comparisons
+            else if (kstrcmp(node->sval, "==") == 0) {
+                result.type = VAL_BOOL;
+                if (left.type == VAL_INT && right.type == VAL_INT) result.bval = (left.ival == right.ival);
+                else if (left.type == VAL_STRING && right.type == VAL_STRING) result.bval = (kstrcmp(left.sval, right.sval) == 0);
+                else result.bval = false;
+            }
+            else if (kstrcmp(node->sval, "!=") == 0) {
+                result.type = VAL_BOOL;
+                if (left.type == VAL_INT && right.type == VAL_INT) result.bval = (left.ival != right.ival);
+                else result.bval = true;
+            }
+            else if (kstrcmp(node->sval, "<") == 0) {
+                result.type = VAL_BOOL;
+                if (left.type == VAL_INT && right.type == VAL_INT) result.bval = (left.ival < right.ival);
+                else result.bval = false;
+            }
+            else if (kstrcmp(node->sval, ">") == 0) {
+                result.type = VAL_BOOL;
+                if (left.type == VAL_INT && right.type == VAL_INT) result.bval = (left.ival > right.ival);
+                else result.bval = false;
+            }
+            
+            // Logical
+            else if (kstrcmp(node->sval, "&&") == 0) {
+                result.type = VAL_BOOL;
+                bool l = (left.type == VAL_BOOL) ? left.bval : (left.type == VAL_INT ? left.ival : false);
+                bool r = (right.type == VAL_BOOL) ? right.bval : (right.type == VAL_INT ? right.ival : false);
+                result.bval = l && r;
+            }
+            else if (kstrcmp(node->sval, "||") == 0) {
+                result.type = VAL_BOOL;
+                bool l = (left.type == VAL_BOOL) ? left.bval : (left.type == VAL_INT ? left.ival : false);
+                bool r = (right.type == VAL_BOOL) ? right.bval : (right.type == VAL_INT ? right.ival : false);
+                result.bval = l || r;
+            }
+            break;
         }
-    } else {
-        // Print variable
-        char *var_name = line + 5; // Skip "print "
-        int value = get_variable_int(var_name);
-        // TODO: Print value
-    }
-}
-
-void parse_assignment(char *line) {
-    char *eq = strchr(line, '=');
-    if (eq) {
-        *eq = '\0';
-        char *var_name = line;
-        char *expr = eq + 1;
-
-        // Remove spaces
-        while (*var_name == ' ') var_name++;
-        char *end_name = var_name;
-        while (*end_name && *end_name != ' ') end_name++;
-        *end_name = '\0';
-
-        while (*expr == ' ') expr++;
-
-        // Enhanced type detection
-        if (strstr(expr, "\"")) {
-            // String assignment
-            // TODO: Implement strings
-        } else if (strchr(expr, '.')) {
-            // Float assignment
-            // TODO: Implement floats
-        } else if (strcmp(expr, "true") == 0 || strcmp(expr, "false") == 0) {
-            // Boolean assignment
-            // TODO: Implement booleans
-        } else {
-            // Integer assignment with expressions
-            int value = evaluate_expression(expr);
-            bool is_temporal = strstr(line, "temporal") != NULL;
-            if(is_temporal) var_name = strstr(var_name, "temporal") + 9;
-            set_variable_int(var_name, value, is_temporal);
+        
+        case NODE_UNOP: {
+             value_t op = eval_expr(it, node->children[0]);
+             if (kstrcmp(node->sval, "!") == 0) {
+                 result.type = VAL_BOOL;
+                 if (op.type == VAL_BOOL) result.bval = !op.bval;
+                 else if (op.type == VAL_INT) result.bval = !op.ival;
+                 else result.bval = false;
+             } else if (kstrcmp(node->sval, "-") == 0) {
+                 if (op.type == VAL_INT) { result.type = VAL_INT; result.ival = -op.ival; }
+                 else if (op.type == VAL_FLOAT) { result.type = VAL_FLOAT; result.fval = -op.fval; }
+             }
+             break;
         }
+        
+        case NODE_CAST: {
+             value_t val = eval_expr(it, node->children[0]);
+             if (kstrcmp(node->sval, "str") == 0) {
+                 result.type = VAL_STRING;
+                 val_to_str(&val, result.sval, sizeof(result.sval));
+             }
+             // Add int(), float() here
+             break;
+        }
+        
+        case NODE_CALL: {
+             /* Find function definition */
+             int func_idx = -1;
+             for (int i = 0; i < it->func_count; i++) {
+                 if (kstrcmp(it->funcs[i].name, node->sval) == 0) {
+                     func_idx = i;
+                     break;
+                 }
+             }
+             if (func_idx == -1) {
+                 result.type = VAL_ERROR;
+                 ksnprintf(result.sval, 64, "Unknown function '%s'", node->sval);
+                 break;
+             }
+             
+             /* Evaluate args */
+             value_t args[8];
+             int arg_count = 0;
+             for (int i = 0; i < node->child_count && i < 8; i++) {
+                 args[i] = eval_expr(it, node->children[i]);
+                 arg_count++;
+             }
+             
+             /* Call setup */
+             env_push(&it->env);
+             func_def_t *fd = &it->funcs[func_idx];
+             for (int i = 0; i < fd->param_count && i < arg_count; i++) {
+                 ast_node_t *pnode = &it->ast->nodes[fd->params[i]];
+                 env_set(&it->env, pnode->sval, args[i], false);
+             }
+             
+             /* Execute */
+             interp_exec(it, fd->body);
+             
+             /* Teardown */
+             env_pop(&it->env);
+             if (it->returning) {
+                 result = it->return_val;
+                 it->returning = false;
+             }
+             break;
+        }
+
+        default:
+            result.type = VAL_ERROR;
+            kstrcpy(result.sval, "Unsupported expression");
+            break;
     }
+    return result;
 }
 
-int evaluate_expression(const char *expr) {
-    // Simple expression evaluator
-    // TODO: Implement full expression parsing
-    return atoi(expr);
+// Forward declaration
+value_t interp_exec(interp_t *it, int node_idx);
+
+/* ── Statement Execution ─────────────────────────────────────────── */
+value_t interp_exec(interp_t *it, int node_idx) {
+    ast_node_t *node = &it->ast->nodes[node_idx];
+    value_t result = { .type = VAL_NULL };
+
+    switch (node->type) {
+        case NODE_PROGRAM:
+        case NODE_BLOCK:
+            for (int i = 0; i < node->child_count; i++) {
+                result = interp_exec(it, node->children[i]);
+                if (result.type == VAL_ERROR) {
+                    term_printf("Runtime Error: %s\n", result.sval);
+                    return result;
+                }
+                if (it->returning || it->breaking || it->continuing) break;
+            }
+            break;
+
+        case NODE_LET: {
+            value_t val = eval_expr(it, node->children[0]);
+            if (val.type == VAL_ERROR) return val;
+            env_set(&it->env, node->sval, val, false);
+            break;
+        }
+
+        case NODE_ASSIGN: {
+            value_t val = eval_expr(it, node->children[0]);
+            if (val.type == VAL_ERROR) return val;
+            if (!env_assign(&it->env, node->sval, val)) {
+                result.type = VAL_ERROR;
+                ksnprintf(result.sval, 64, "Cannot assign to '%s'", node->sval);
+            }
+            break;
+        }
+
+        case NODE_FUNCTION: {
+            if (it->func_count < MAX_FUNCS) {
+                func_def_t *fd = &it->funcs[it->func_count++];
+                kstrcpy(fd->name, node->sval);
+                fd->body = node->children[node->child_count - 1]; // Last child is body
+                fd->param_count = node->child_count - 1;
+                for(int i=0; i<fd->param_count; i++) {
+                    fd->params[i] = node->children[i];
+                }
+                fd->used = true;
+            }
+            break;
+        }
+
+        case NODE_IF: {
+            value_t cond = eval_expr(it, node->children[0]);
+            bool is_true = (cond.type == VAL_BOOL && cond.bval) || (cond.type == VAL_INT && cond.ival != 0);
+            
+            if (is_true) {
+                interp_exec(it, node->children[1]); // Then block
+            } else if (node->child_count > 2) {
+                interp_exec(it, node->children[2]); // Else block
+            }
+            break;
+        }
+
+        case NODE_WHILE: {
+            while (true) {
+                value_t cond = eval_expr(it, node->children[0]);
+                if (!((cond.type == VAL_BOOL && cond.bval) || (cond.type == VAL_INT && cond.ival != 0)))
+                    break;
+                interp_exec(it, node->children[1]); // Body
+                if (it->returning) break;
+                if (it->breaking) { it->breaking = false; break; }
+                if (it->continuing) { it->continuing = false; continue; }
+            }
+            break;
+        }
+        
+        case NODE_RETURN: {
+            if (node->child_count > 0) {
+                it->return_val = eval_expr(it, node->children[0]);
+            } else {
+                it->return_val.type = VAL_NULL;
+            }
+            it->returning = true;
+            break;
+        }
+
+        case NODE_PRINT: {
+            value_t val = eval_expr(it, node->children[0]);
+            if (val.type == VAL_ERROR) return val;
+            char buf[256];
+            val_to_str(&val, buf, sizeof(buf));
+            term_printf("%s\n", buf);
+            break;
+        }
+
+        // TODO: Add other statement types
+        default:
+            // It might be an expression statement
+            return eval_expr(it, node_idx);
+    }
+    return result;
 }
 
-void parse_if(char *line) {
-    // Enhanced if with visual conditions
-    // if condition then action else action
-    // TODO: Implement conditional execution
+/* ── Public API ────────────────────────────────────────────────────── */
+void aurora_runtime_init(void) {
+    // Initialize any global state for the runtime
 }
 
-void parse_for(char *line) {
-    // Enhanced for with visual feedback
-    // for i in range(start, end) with visual progress
-    // TODO: Implement loops with progress bars
+int aurora_run_string(const char *code) {
+    lexer_t l;
+    parser_t p;
+    ast_t a;
+    interp_t i;
+
+    // 1. Lex
+    lexer_init(&l, code);
+    lexer_tokenize(&l);
+
+    // 2. Parse
+    p.lex = &l;
+    p.ast = &a;
+    p.had_error = false;
+    a.count = 0;
+    int root = parse_program(&p);
+    if (p.had_error) {
+        term_printf("Parse Error: %s\n", p.error);
+        return -1;
+    }
+
+    // 3. Interpret
+    interp_init(&i, &a);
+    interp_exec(&i, root);
+
+    return 0;
 }

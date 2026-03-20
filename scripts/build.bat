@@ -1,24 +1,80 @@
 @echo off
-echo Building AuroraOS...
+setlocal enabledelayedexpansion
 
-REM Build bootloader
-nasm -f bin src\bootloader\bootloader.asm -o build\bootloader.bin
+echo [AURORAOS BUILD SYSTEM]
+echo -----------------------
 
-REM Build kernel and all components
-gcc -ffreestanding -c src\kernel\kernel.c -o build\kernel.o
-gcc -ffreestanding -c src\kernel\keyboard.c -o build\keyboard.o
-gcc -ffreestanding -c src\kernel\memory.c -o build\memory.o
-gcc -ffreestanding -c src\shell\shell.c -o build\shell.o
-gcc -ffreestanding -c src\auroralang\auroralang.c -o build\auroralang.o
-gcc -ffreestanding -c src\auroralang\ai_assistant.c -o build\ai_assistant.o
-gcc -ffreestanding -c src\kernel\vfs.c -o build\vfs.o
-gcc -ffreestanding -c src\kernel\scheduler.c -o build\scheduler.o
-gcc -ffreestanding -c src\kernel\desktop.c -o build\desktop.o
-gcc -ffreestanding -c src\kernel\services.c -o build\services.o
-gcc -ffreestanding -c src\kernel\packages.c -o build\packages.o
-ld -T src\kernel\kernel.ld -o build\kernel.bin build\kernel.o build\keyboard.o build\memory.o build\shell.o build\auroralang.o build\ai_assistant.o build\vfs.o build\scheduler.o build\desktop.o build\services.o build\packages.o
+:: Create build folder
+if not exist build mkdir build
 
-REM Combine bootloader and kernel into disk image
-copy /b build\bootloader.bin + build\kernel.bin build\auroraos.img
+:: --- Check Tools ---
+where gcc >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [ERROR] GCC not found. Add it to PATH.
+    exit /b 1
+)
 
-echo Build complete. Run with: qemu-system-x86_64 build\auroraos.img
+where nasm >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [ERROR] NASM not found. Add it to PATH.
+    exit /b 1
+)
+
+where ld >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [ERROR] LD not found. Add it to PATH.
+    exit /b 1
+)
+
+:: --- 1. Build Bootloader ---
+echo [1/4] Building Bootloader...
+
+if not exist src\bootloader\kernel_entry.asm (
+    echo [ERROR] src\bootloader\kernel_entry.asm not found.
+    exit /b 1
+)
+nasm -f win32 src\bootloader\kernel_entry.asm -o build\kernel_entry.o
+if errorlevel 1 exit /b 1
+
+:: --- 2. Compile Kernel & Modules ---
+echo [2/4] Compiling System Components...
+
+set CFLAGS=-m32 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector -I src
+
+set OBJ_FILES=
+
+for /R src %%f in (*.c) do (
+    echo   Compiling %%~nxf...
+    gcc %CFLAGS% -c "%%f" -o "build\%%~nf.o"
+    if errorlevel 1 (
+        echo [ERROR] Compilation failed for %%~nxf
+        exit /b 1
+    )
+    set OBJ_FILES=!OBJ_FILES! build\%%~nf.o
+)
+
+:: --- 3. Link Kernel ---
+echo [3/4] Linking Kernel...
+
+:: Note: Linking kernel_entry.o FIRST is critical to ensure execution starts there.
+:: Using i386pe for Windows MinGW compatibility.
+ld -m i386pe -Ttext 0x1000 -o build\kernel.bin build\kernel_entry.o !OBJ_FILES! --oformat binary
+
+if errorlevel 1 (
+    echo [ERROR] Linking failed
+    exit /b 1
+
+:: --- 4. Create OS Image ---
+echo [4/4] Creating OS Image...
+
+copy /b build\bootloader.bin + build\kernel.bin build\auroraos.img >nul
+
+if errorlevel 1 (
+    echo [ERROR] Failed to create OS image
+    exit /b 1
+)
+
+echo -----------------------
+echo [SUCCESS] Build Complete: build\auroraos.img
+echo Run with:
+echo qemu-system-x86_64 -drive format=raw,file=build\auroraos.img

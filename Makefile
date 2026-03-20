@@ -1,97 +1,69 @@
 # AuroraOS Makefile
+# A more scalable and professional build system
 
 CC = gcc
 LD = ld
 ASM = nasm
 QEMU = qemu-system-x86_64
 
-BUILD_DIR = build
-SRC_DIR = src
+BUILD_DIR := build
+SRC_DIR := src
 
-BOOTLOADER_SRC = $(SRC_DIR)/bootloader/bootloader.asm
-KERNEL_SRC = $(SRC_DIR)/kernel/kernel.c
-KEYBOARD_SRC = $(SRC_DIR)/kernel/keyboard.c
-MEMORY_SRC = $(SRC_DIR)/kernel/memory.c
-VFS_SRC = $(SRC_DIR)/kernel/vfs.c
-SCHEDULER_SRC = $(SRC_DIR)/kernel/scheduler.c
-DESKTOP_SRC = $(SRC_DIR)/kernel/desktop.c
-SERVICES_SRC = $(SRC_DIR)/kernel/services.c
-PACKAGES_SRC = $(SRC_DIR)/kernel/packages.c
-SHELL_SRC = $(SRC_DIR)/shell/shell.c
-AURORALANG_SRC = $(SRC_DIR)/auroralang/auroralang.c
-AI_ASSISTANT_SRC = $(SRC_DIR)/auroralang/ai_assistant.c
+# --- Source Files ---
+# Automatically find all .c and .asm files
+ASM_SOURCES := $(wildcard $(SRC_DIR)/**/*.asm)
+C_SOURCES   := $(wildcard $(SRC_DIR)/**/*.c)
 
-BOOTLOADER_BIN = $(BUILD_DIR)/bootloader.bin
-KERNEL_BIN = $(BUILD_DIR)/kernel.bin
-KERNEL_OBJ = $(BUILD_DIR)/kernel.o
-KEYBOARD_OBJ = $(BUILD_DIR)/keyboard.o
-MEMORY_OBJ = $(BUILD_DIR)/memory.o
-VFS_OBJ = $(BUILD_DIR)/vfs.o
-SCHEDULER_OBJ = $(BUILD_DIR)/scheduler.o
-DESKTOP_OBJ = $(BUILD_DIR)/desktop.o
-SERVICES_OBJ = $(BUILD_DIR)/services.o
-PACKAGES_OBJ = $(BUILD_DIR)/packages.o
-SHELL_OBJ = $(BUILD_DIR)/shell.o
-AURORALANG_OBJ = $(BUILD_DIR)/auroralang.o
-AI_ASSISTANT_OBJ = $(BUILD_DIR)/ai_assistant.o
-IMAGE = $(BUILD_DIR)/auroraos.img
+# --- Object Files ---
+# Generate object file paths from source file paths
+BOOTLOADER_BIN := $(patsubst $(SRC_DIR)/bootloader/%.asm, $(BUILD_DIR)/%.bin, $(filter %bootloader.asm, $(ASM_SOURCES)))
+OBJECTS        := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(C_SOURCES))
 
-LINKER_SCRIPT = $(SRC_DIR)/kernel/kernel.ld
+# --- Output Files ---
+KERNEL_BIN := $(BUILD_DIR)/kernel.bin
+IMAGE      := $(BUILD_DIR)/auroraos.img
 
-CFLAGS = -ffreestanding -c
-LDFLAGS = -T $(LINKER_SCRIPT)
+# --- Build Flags ---
+LINKER_SCRIPT := $(SRC_DIR)/kernel/kernel.ld
+CFLAGS        := -ffreestanding -c -I$(SRC_DIR) -Wall -Wextra
+LDFLAGS       := -T $(LINKER_SCRIPT)
+ASMFLAGS      := -f bin
 
+# =============================================================================
+# Main Targets
+# =============================================================================
 all: $(IMAGE)
 
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
-
-$(BOOTLOADER_BIN): $(BOOTLOADER_SRC) | $(BUILD_DIR)
-	$(ASM) -f bin $< -o $@
-
-$(KERNEL_OBJ): $(KERNEL_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(KEYBOARD_OBJ): $(KEYBOARD_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(MEMORY_OBJ): $(MEMORY_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(VFS_OBJ): $(VFS_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(SCHEDULER_OBJ): $(SCHEDULER_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(DESKTOP_OBJ): $(DESKTOP_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(SERVICES_OBJ): $(SERVICES_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(PACKAGES_OBJ): $(PACKAGES_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(SHELL_OBJ): $(SHELL_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(AURORALANG_OBJ): $(AURORALANG_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(AI_ASSISTANT_OBJ): $(AI_ASSISTANT_SRC) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
-
-$(KERNEL_BIN): $(KERNEL_OBJ) $(KEYBOARD_OBJ) $(MEMORY_OBJ) $(VFS_OBJ) $(SCHEDULER_OBJ) $(DESKTOP_OBJ) $(SERVICES_OBJ) $(PACKAGES_OBJ) $(SHELL_OBJ) $(AURORALANG_OBJ) $(AI_ASSISTANT_OBJ)
-	$(LD) $(LDFLAGS) -o $@ $^
-
 $(IMAGE): $(BOOTLOADER_BIN) $(KERNEL_BIN)
-	cat $^ > $@
+	@echo "==> Creating OS Image: $@"
+	@cat $^ > $@
+
+$(KERNEL_BIN): $(OBJECTS) $(LINKER_SCRIPT)
+	@echo "==> Linking Kernel: $@"
+	@$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
 
 run: $(IMAGE)
-	$(QEMU) $<
+	@echo "==> Booting AuroraOS in QEMU..."
+	@$(QEMU) $<
 
 clean:
-	rm -rf $(BUILD_DIR)
+	@echo "==> Cleaning build files..."
+	@rm -rf $(BUILD_DIR)
 
 .PHONY: all run clean
+
+# =============================================================================
+# Pattern Rules (The magic that makes this scalable)
+# =============================================================================
+
+# Rule to compile the bootloader
+$(BUILD_DIR)/%.bin: $(SRC_DIR)/bootloader/%.asm
+	@echo "==> Assembling: $<"
+	@mkdir -p $(dir $@)
+	@$(ASM) $(ASMFLAGS) $< -o $@
+
+# Generic rule to compile any .c file from src/ to an .o file in build/
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	@echo "==> Compiling: $<"
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) -c $< -o $@

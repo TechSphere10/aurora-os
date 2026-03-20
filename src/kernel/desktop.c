@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include "../lib/string.h"
 
 // Simple Desktop GUI for AuroraOS
 // Text-based GUI simulation for the OS
@@ -135,8 +136,8 @@ void draw_node(ui_node_t *node) {
 
     // Title bar
     char title_buf[32];
-    sprintf(title_buf, "[%d] %s", node->id, node->title);
-    print_string(title_buf, node->x + 2, node->y, TITLEBAR_COLOR);
+    // sprintf is not freestanding. We need a custom implementation. For now, manual.
+    print_string(node->title, node->x + 2, node->y, TITLEBAR_COLOR);
 
     // Close button
     print_char('X', node->x + node->width - 2, node->y, 0x4F);
@@ -151,7 +152,7 @@ void draw_node(ui_node_t *node) {
         }
 
         for (char *c = line; c < end; c++) {
-            print_char(*c, window->x + 1 + (c - line), content_y, color);
+            print_char(*c, node->x + 1 + (c - line), content_y, color);
         }
 
         if (*end == '\n') {
@@ -233,11 +234,4 @@ void desktop_list_nodes() {
     for (int i = 0; i < node_count; i++) {
         term_printf("  Node %d: '%s' at (%d, %d)\n", nodes[i].id, nodes[i].title, nodes[i].x, nodes[i].y);
     }
-}
-
-// String functions
-char *strcpy(char *dest, const char *src) {
-    char *d = dest;
-    while ((*d++ = *src++));
-    return dest;
 }

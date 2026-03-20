@@ -1,5 +1,12 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include "../auroralang/string.h"
+#include "kernel.h"
+
+// Log levels for package manager
+#define LOG_INFO 0
+#define LOG_WARNING 1
+#define LOG_ERROR 2
 
 // Package Management System for AuroraOS
 // Simulates software installation and management
@@ -53,6 +60,10 @@ const char* package_descriptions[] = {
     "Complete development toolkit"
 };
 
+// Forward declarations
+bool install_package(const char *name, const char *version, bool system_package);
+void log_message(int level, const char *message);
+
 // Initialize package system
 void packages_init() {
     // Install system packages
@@ -92,8 +103,8 @@ bool install_package(const char *name, const char *version, bool system_package)
 
     // Add to file system
     char path[64];
-    sprintf(path, "/apps/%s", name);
-    vfs_create_directory(path);
+    ksnprintf(path, sizeof(path), "/apps/%s", name);
+    vfs_mkdir(path);
 
     log_message(LOG_INFO, "Installed package: ");
     log_message(LOG_INFO, name);
@@ -113,7 +124,7 @@ bool remove_package(const char *name) {
 
             // Remove from file system
             char path[64];
-            sprintf(path, "/apps/%s", name);
+            ksnprintf(path, sizeof(path), "/apps/%s", name);
             vfs_delete(path);
 
             // Mark as removed
@@ -181,7 +192,7 @@ uint32_t list_available_packages(char *buffer, uint32_t buffer_size) {
         }
 
         if (!installed && offset < buffer_size - 64) {
-            offset += sprintf(buffer + offset, "%s - %s\n",
+            offset += ksnprintf(buffer + offset, buffer_size - offset, "%s - %s\n",
                             name, package_descriptions[i]);
             count++;
         }
@@ -238,40 +249,19 @@ uint32_t get_installed_size() {
     return total;
 }
 
-// Forward declarations and helper functions
-uint32_t get_system_time();
-void log_message(int level, const char *message);
-bool vfs_create_directory(const char *path);
-bool vfs_delete(const char *path);
+// Helper functions implementation
+uint32_t get_system_time() {
+    return timer_seconds();
+}
+
+void log_message(int level, const char *message) {
+    // Map to kernel timeline
+    const char *cat = (level == LOG_ERROR) ? "error" : "package";
+    timeline_record(cat, message);
+}
 
 int rand() {
     static uint32_t seed = 12345;
     seed = seed * 1103515245 + 12345;
     return (seed >> 16) & 0x7FFF;
-}
-
-int strcmp(const char *s1, const char *s2) {
-    while (*s1 && *s2 && *s1 == *s2) {
-        s1++;
-        s2++;
-    }
-    return *s1 - *s2;
-}
-
-char *strcpy(char *dest, const char *src) {
-    char *d = dest;
-    while ((*d++ = *src++));
-    return dest;
-}
-
-int sprintf(char *buffer, const char *format, ...) {
-    // Simple sprintf
-    strcpy(buffer, format);
-    return strlen(buffer);
-}
-
-size_t strlen(const char *s) {
-    size_t len = 0;
-    while (s[len]) len++;
-    return len;
 }

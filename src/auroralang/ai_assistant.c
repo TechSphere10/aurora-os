@@ -1,11 +1,32 @@
 #include <stdint.h>
 #include <stdbool.h>
+#include "string.h"
+#include "../kernel/kernel.h"
 
 // AI-Assisted Development Module for AuroraOS
-// Simple rule-based code suggestions and optimizations
+// Tracks user behavior and provides suggestions.
 
 #define MAX_SUGGESTIONS 10
 #define MAX_SUGGESTION_LEN 256
+#define MAX_EVENTS 256
+
+// --- AI Memory Engine: Event Logging ---
+typedef enum {
+    EVENT_COMMAND_SUCCESS,
+    EVENT_COMMAND_FAIL,
+    EVENT_FILE_ACCESS,
+    EVENT_APP_CRASH,
+    EVENT_AURALANG_ERROR
+} event_type_t;
+
+typedef struct {
+    event_type_t type;
+    char data[128];
+    // uint32_t timestamp; // TODO: Add timestamp from kernel timer
+} system_event_t;
+
+system_event_t event_log[MAX_EVENTS];
+int event_log_count = 0;
 
 typedef struct {
     char suggestion[MAX_SUGGESTION_LEN];
@@ -16,14 +37,55 @@ typedef struct {
 ai_suggestion_t suggestions[MAX_SUGGESTIONS];
 int suggestion_count = 0;
 
-// Code pattern recognition
-typedef enum {
-    PATTERN_LOOP,
-    PATTERN_CONDITION,
-    PATTERN_FUNCTION,
-    PATTERN_UI_ELEMENT,
-    PATTERN_VARIABLE
-} code_pattern_t;
+void ai_log_event(event_type_t type, const char* data) {
+    if (event_log_count < MAX_EVENTS) {
+        int index = event_log_count++; // In a real system, use a circular buffer
+        event_log[index].type = type;
+        strncpy(event_log[index].data, data, sizeof(event_log[index].data) - 1);
+    }
+}
+
+// --- Predictive Command System ---
+int ai_get_command_suggestions(const char* partial_cmd, char suggestions_out[MAX_SUGGESTIONS][MAX_SUGGESTION_LEN]) {
+    int count = 0;
+    if (strlen(partial_cmd) == 0) return 0;
+
+    for (int i = event_log_count - 1; i >= 0 && count < MAX_SUGGESTIONS; i--) {
+        if (event_log[i].type == EVENT_COMMAND_SUCCESS && strstr(event_log[i].data, partial_cmd) == event_log[i].data) {
+            strcpy(suggestions_out[count++], event_log[i].data);
+        }
+    }
+    return count;
+}
+
+// --- Intent-Based Programming & Natural Language to Code ---
+void ai_generate_code_from_intent(const char* intent, char* code_out, size_t out_size) {
+    // This is a simple proof-of-concept. A real implementation would use
+    // more advanced NLP techniques.
+    if (strstr(intent, "sort") && strstr(intent, "list")) {
+        strncpy(code_out, "let sorted_list = list.sort()", out_size);
+    } else if (strstr(intent, "read") && strstr(intent, "file")) {
+        strncpy(code_out, "let content = read_file(\"path/to/your/file.txt\")\nprint content", out_size);
+    } else if (strstr(intent, "list") && strstr(intent, "files")) {
+        // This intent can be mapped to a shell command, not just Aura-Lang code
+        strncpy(code_out, "ls /", out_size);
+    } else {
+        strncpy(code_out, "# Sorry, I don't understand that intent yet.", out_size);
+    }
+}
+
+// --- Error Memory System ---
+void ai_get_error_suggestion(const char* error_msg, char* suggestion_out, size_t out_size) {
+    // In a real system, this would search the event_log for similar past errors and their resolutions.
+    if (strstr(error_msg, "Undefined variable")) {
+        strncpy(suggestion_out, "Suggestion: Check for typos or declare the variable with 'let'.", out_size);
+    } else {
+        strncpy(suggestion_out, "Suggestion: No specific fix found in history. Check documentation.", out_size);
+    }
+}
+
+// Forward declaration
+void add_suggestion(const char *suggestion, const char *example, int confidence);
 
 // Analyze code and provide suggestions
 void analyze_code(const char *code) {
@@ -118,42 +180,47 @@ void optimize_code(const char *code) {
     }
 }
 
-// Simple string functions (duplicated from auroralang.c)
-int strcmp(const char *s1, const char *s2) {
-    while (*s1 && *s2 && *s1 == *s2) {
-        s1++;
-        s2++;
+// --- Interactive Language Tutor ---
+typedef struct {
+    const char *topic;
+    const char *description;
+    const char *example;
+} tutorial_t;
+
+static const tutorial_t tutorials[] = {
+    {"variables", "Use 'let' to declare variables. Types are inferred.", "let x = 10\nlet name = \"Aurora\""},
+    {"constants", "Use 'const' for values that cannot change.", "const PI = 3.14159"},
+    {"functions", "Define reusable code blocks with parameters.", "function greet(name) {\n  print \"Hello \" + name\n}"},
+    {"loops", "Repeat actions with 'loop' (range) or 'while' (condition).", "loop i from 1 to 5 {\n  print i\n}"},
+    {"decisions", "Use 'if', 'else' and 'else if' for logic.", "if x > 10 { print \"Big\" } else { print \"Small\" }"},
+    {"time", "Track variable history with 'temporal'.", "temporal let sens = 20\nsens = 25\nprint sens @ -1  # Prints 20"},
+    {"scopes", "Semantic scopes group related operations.", "scope ui_batch {\n  window.title = \"Loading\"\n}"},
+    {0, 0, 0}
+};
+
+void ai_tutorial_list(void) {
+    term_setcolor(VGA_COLOR(VGA_LIGHT_MAGENTA, VGA_BLACK));
+    term_writeln("AuroraLang Tutorials:");
+    term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+    for (int i = 0; tutorials[i].topic; i++) {
+        term_printf("  - %s\n", tutorials[i].topic);
     }
-    return *s1 - *s2;
+    term_writeln("Type 'explain <topic>' to learn more.");
 }
 
-char *strcpy(char *dest, const char *src) {
-    char *d = dest;
-    while ((*d++ = *src++));
-    return dest;
-}
-
-char *strstr(const char *haystack, const char *needle) {
-    size_t len = strlen(needle);
-    while (*haystack) {
-        if (strncmp(haystack, needle, len) == 0) {
-            return (char*)haystack;
+void ai_explain_topic(const char *topic) {
+    for (int i = 0; tutorials[i].topic; i++) {
+        if (strstr(topic, tutorials[i].topic)) {
+            term_setcolor(VGA_COLOR(VGA_LIGHT_CYAN, VGA_BLACK));
+            term_printf("Topic: %s\n", tutorials[i].topic);
+            term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+            term_printf("%s\n\n", tutorials[i].description);
+            term_setcolor(VGA_COLOR(VGA_LIGHT_GREEN, VGA_BLACK));
+            term_writeln("Example:");
+            term_writeln(tutorials[i].example);
+            term_setcolor(VGA_COLOR(VGA_LIGHT_GREY, VGA_BLACK));
+            return;
         }
-        haystack++;
     }
-    return NULL;
-}
-
-int strncmp(const char *s1, const char *s2, size_t n) {
-    while (n-- && *s1 && *s2 && *s1 == *s2) {
-        s1++;
-        s2++;
-    }
-    return n < 0 ? 0 : *s1 - *s2;
-}
-
-size_t strlen(const char *s) {
-    size_t len = 0;
-    while (s[len]) len++;
-    return len;
+    ai_tutorial_list();
 }
