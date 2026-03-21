@@ -1,5 +1,5 @@
 #include "kernel.h"
-#include "../lib/string.h"
+#include "../auroralang/string.h"
 
 /* ═══════════════════════════════════════════════════════════════════
    SEMANTIC  VIRTUAL  FILE  SYSTEM
@@ -8,20 +8,6 @@
    – Semantic search: find files related to a query
    – Time-Travel: Versioning for all file writes
    ═══════════════════════════════════════════════════════════════════ */
-
-#define VFS_MAX_VERSIONS_PER_FILE 8
-
-typedef struct vfs_data_block {
-    char data[VFS_MAX_DATA];
-    uint32_t size;
-    uint32_t ref_count; // For content-addressable storage
-} vfs_data_block_t;
-
-typedef struct vfs_version {
-    uint32_t timestamp;
-    vfs_data_block_t* block;
-    struct vfs_version* prev_version;
-} vfs_version_t;
 
 // For now, a simple pool of blocks and versions
 static vfs_data_block_t data_block_pool[VFS_MAX_NODES];

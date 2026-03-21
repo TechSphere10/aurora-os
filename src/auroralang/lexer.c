@@ -1,4 +1,5 @@
 #include "auroralang.h"
+#include "string.h"
 
 /* ═══════════════════════════════════════════════════════════════════
    AURORALANG  LEXER
@@ -47,7 +48,7 @@ static token_type_t lookup_keyword(const char *s) {
 }
 
 static void emit(lexer_t *l, token_type_t t, const char *lex, int ival, double fval) {
-    if (l->tok_count >= MAX_TOKENS) return;
+    if (l->tok_count >= MAX_NODES) return;
     token_t *tk = &l->tokens[l->tok_count++];
     tk->type = t;
     tk->line = l->line;
@@ -57,7 +58,7 @@ static void emit(lexer_t *l, token_type_t t, const char *lex, int ival, double f
 }
 
 void lexer_init(lexer_t *l, const char *src) {
-    l->src       = src;
+    l->source    = src;
     l->pos       = 0;
     l->line      = 1;
     l->tok_count = 0;
@@ -65,7 +66,7 @@ void lexer_init(lexer_t *l, const char *src) {
 }
 
 void lexer_tokenize(lexer_t *l) {
-    const char *s = l->src;
+    const char *s = l->source;
     int i = 0;
     while (s[i]) {
         /* Skip spaces */

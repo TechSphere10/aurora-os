@@ -1,83 +1,64 @@
 #include "auroralang.h"
-#include "../lib/string.h"
+#include "string.h"
 
 /* ═══════════════════════════════════════════════════════════════════
    ENVIRONMENT / SCOPE MANAGEMENT
    ═══════════════════════════════════════════════════════════════════ */
 
-void env_push(env_t *e) {
-    if (e->depth < ENV_MAX_DEPTH - 1) {
-        e->depth++;
-        e->frames[e->depth].var_count = 0;
-    } else {
-        term_printf("Runtime Error: Scope stack overflow\n");
+void env_push(env_stack_t *env) {
+    if (env->top < 15) {
+        env->top++;
+        env->scopes[env->top].count = 0;
+        env->scopes[env->top].parent_idx = env->top - 1;
     }
 }
 
-void env_pop(env_t *e) {
-    if (e->depth > 0) {
-        e->depth--;
+void env_pop(env_stack_t *env) {
+    if (env->top >= 0) {
+        env->top--;
     }
 }
 
-/* Set a variable in the current scope (declaration) */
-bool env_set(env_t *e, const char *name, value_t val, bool is_const) {
-    env_frame_t *frame = &e->frames[e->depth];
-
-    /* Check for redefinition in current scope */
-    for (int i = 0; i < frame->var_count; i++) {
-        if (kstrcmp(frame->vars[i].name, name) == 0) {
-            if (frame->vars[i].is_const) {
-                term_printf("Runtime Error: Cannot redeclare constant '%s'\n", name);
-                return false;
-            }
-            // Update existing
-            frame->vars[i].val = val;
-            frame->vars[i].is_const = is_const;
-            return true;
-        }
+void env_set(env_stack_t *env, const char *name, value_t val, bool is_new) {
+    // If not new, try to update existing variable in current or parent scopes
+    if (!is_new) {
+        if (env_assign(env, name, val)) return;
     }
-
-    if (frame->var_count < ENV_MAX_VARS) {
-        env_var_t *var = &frame->vars[frame->var_count++];
-        kstrncpy(var->name, name, 63);
-        var->val = val;
-        var->is_const = is_const;
-        return true;
-    } else {
-        term_printf("Runtime Error: Variable limit reached in scope\n");
-        return false;
+    // Otherwise (or if not found), define in current scope
+    env_scope_t *s = &env->scopes[env->top];
+    if (s->count < 64) {
+        kstrcpy(s->vars[s->count].name, name);
+        s->vars[s->count].val = val;
+        s->count++;
     }
 }
 
-/* Get a variable from the nearest scope */
-bool env_get(env_t *e, const char *name, value_t *out) {
-    for (int d = e->depth; d >= 0; d--) {
-        env_frame_t *frame = &e->frames[d];
-        for (int i = 0; i < frame->var_count; i++) {
-            if (kstrcmp(frame->vars[i].name, name) == 0) {
-                *out = frame->vars[i].val;
+bool env_get(env_stack_t *env, const char *name, value_t *out) {
+    int curr = env->top;
+    while (curr >= 0) {
+        env_scope_t *s = &env->scopes[curr];
+        for (int i = 0; i < s->count; i++) {
+            if (kstrcmp(s->vars[i].name, name) == 0) {
+                *out = s->vars[i].val;
                 return true;
             }
         }
+        curr--; // Check parent scope (simple stack approach)
     }
     return false;
 }
 
-/* Assign to an existing variable in the nearest scope */
-bool env_assign(env_t *e, const char *name, value_t val) {
-    for (int d = e->depth; d >= 0; d--) {
-        env_frame_t *frame = &e->frames[d];
-        for (int i = 0; i < frame->var_count; i++) {
-            if (kstrcmp(frame->vars[i].name, name) == 0) {
-                if (frame->vars[i].is_const) {
-                    term_printf("Runtime Error: Assignment to constant '%s'\n", name);
-                    return false;
-                }
-                frame->vars[i].val = val;
+bool env_assign(env_stack_t *env, const char *name, value_t val) {
+    int curr = env->top;
+    while (curr >= 0) {
+        env_scope_t *s = &env->scopes[curr];
+        for (int i = 0; i < s->count; i++) {
+            if (kstrcmp(s->vars[i].name, name) == 0) {
+                s->vars[i].val = val;
                 return true;
             }
         }
+        curr--;
     }
     return false;
 }

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
-#include "../lib/string.h"
+#include "../auroralang/string.h"
+#include "kernel.h"
 
 // Simple Desktop GUI for AuroraOS
 // Text-based GUI simulation for the OS
@@ -31,16 +32,34 @@ typedef struct {
 ui_node_t nodes[MAX_NODES];
 int node_count = 0;
 int focused_node = -1;
+char desktop_icons[16][32];
 
 // Desktop state
 bool desktop_mode = false;
+
+// Forward declarations
+void set_focused_node(int index);
+void draw_node(ui_node_t *node);
+
+// Drawing Primitives Implementation
+void print_char(char c, int x, int y, uint32_t color) {
+    term_set_cursor(x, y);
+    term_setcolor((uint8_t)color);
+    term_putchar(c);
+}
+
+void print_string(const char *str, int x, int y, uint32_t color) {
+    term_set_cursor(x, y);
+    term_setcolor((uint8_t)color);
+    term_write(str);
+}
 
 // Initialize desktop
 void desktop_init() {
     desktop_mode = true;
 
     // Add some default icons
-    strcpy(desktop_icons[0], "Terminal");
+    kstrcpy(desktop_icons[0], "Terminal");
 }
 
 // Create a window
@@ -49,7 +68,7 @@ int create_node(const char *title, int x, int y, int width, int height) {
 
     int index = node_count++;
     nodes[index].id = index + 1; // ID is 1-based
-    strcpy(nodes[index].title, title);
+    kstrcpy(nodes[index].title, title);
     nodes[index].x = x;
     nodes[index].y = y;
     nodes[index].width = width;
@@ -178,7 +197,7 @@ void handle_desktop_input(char key) {
 // Set window content
 void set_window_content(int window_id, const char *content) {
     if (window_id >= 0 && window_id < node_count) {
-        strcpy(nodes[window_id].content, content);
+        kstrcpy(nodes[window_id].content, content);
     }
 }
 

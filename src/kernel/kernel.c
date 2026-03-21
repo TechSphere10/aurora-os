@@ -10,9 +10,6 @@ typedef struct {
     /* ... more fields we don't need right now */
 } multiboot_info_t;
 
-/* ── Global settings ───────────────────────────────────────────────── */
-aurora_settings_t g_settings;
-
 /* ── Boot banner ───────────────────────────────────────────────────── */
 static void print_banner(void) {
     term_setcolor(VGA_COLOR(VGA_LIGHT_CYAN, VGA_BLACK));

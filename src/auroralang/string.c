@@ -62,41 +62,29 @@ void *memset(void *s, int c, size_t n) {
     return s;
 }
 
-void *memcpy(void *dest, const void *src, size_t n) {
-    unsigned char *d = dest;
-    const unsigned char *s = src;
-    while (n--) *d++ = *s++;
-    return dest;
+int memcmp(const void *a, const void *b, size_t n) {
+    const uint8_t *p = a, *q = b;
+    while (n--) { if (*p != *q) return *p - *q; p++; q++; }
+    return 0;
 }
 
-char *itoa(int value, char *str, int base) {
-    char *rc;
-    char *ptr;
-    char *low;
-    if (base < 2 || base > 36) {
-        *str = '\0';
-        return str;
-    }
-    rc = ptr = str;
-    if (value < 0 && base == 10) {
-        *ptr++ = '-';
-    }
-    low = ptr;
-    int v = value;
-    if (v < 0 && base == 10) v = -v;
-    
-    do {
-        *ptr++ = "0123456789abcdefghijklmnopqrstuvwxyz"[v % base];
-        v /= base;
-    } while (v);
-    
-    *ptr-- = '\0';
-    while (low < ptr) {
-        char tmp = *low;
-        *low++ = *ptr;
-        *ptr-- = tmp;
-    }
-    return rc;
+void *memcpy(void *dst, const void *src, size_t n) {
+    uint8_t *d = dst; const uint8_t *s = src;
+    while (n--) *d++ = *s++;
+    return dst;
+}
+
+void itoa(int n, char *buf, int base) {
+    static const char digits[] = "0123456789abcdef";
+    char tmp[32]; int i = 0, neg = 0;
+    if (n < 0 && base == 10) { neg = 1; n = -n; }
+    if (n == 0) { buf[0]='0'; buf[1]='\0'; return; }
+    unsigned un = (unsigned)n;
+    while (un) { tmp[i++] = digits[un % (unsigned)base]; un /= (unsigned)base; }
+    if (neg) tmp[i++] = '-';
+    int j = 0;
+    while (i--) buf[j++] = tmp[i];
+    buf[j] = '\0';
 }
 
 int atoi(const char *str) {
@@ -106,30 +94,50 @@ int atoi(const char *str) {
     return res * sign;
 }
 
-char *strtok(char *str, const char *delim) {
-    static char *p = NULL;
-    if (str) p = str;
-    else if (!p) return NULL;
-    while (*p && strchr(delim, *p)) p++;
-    if (!*p) return NULL;
-    char *start = p;
-    while (*p && !strchr(delim, *p)) p++;
-    if (*p) { *p = '\0'; p++; } else p = NULL;
+char *strtok(char *str, const char *delim, char **saveptr) {
+    char *s = str ? str : *saveptr;
+    if (!s) return 0;
+    while (*s && strchr(delim, *s)) s++;
+    if (!*s) { *saveptr = 0; return 0; }
+    char *start = s;
+    while (*s && !strchr(delim, *s)) s++;
+    if (*s) { *s++ = '\0'; }
+    *saveptr = s;
     return start;
 }
 
 int ksnprintf(char *buf, size_t n, const char *fmt, ...) {
-    va_list args; va_start(args, fmt);
-    size_t i = 0; const char *p = fmt;
-    while (*p && i < n - 1) {
-        if (*p == '%') {
-            p++;
-            if (*p == 's') {
-                char *s = va_arg(args, char*);
-                while (*s && i < n - 1) buf[i++] = *s++;
-            }
-        } else buf[i++] = *p;
-        p++;
+    __builtin_va_list ap;
+    __builtin_va_start(ap, fmt);
+    size_t pos = 0;
+    char tmp[32];
+#define EMIT(c) do { if (pos+1 < n) buf[pos++] = (c); } while(0)
+    for (; *fmt; fmt++) {
+        if (*fmt != '%') { EMIT(*fmt); continue; }
+        fmt++;
+        switch (*fmt) {
+        case 's': { const char *s = __builtin_va_arg(ap, const char*);
+                    if (!s) s = "(null)";
+                    while (*s && pos+1 < n) buf[pos++] = *s++;
+                    break; }
+        case 'd': { int v = __builtin_va_arg(ap, int);
+                    itoa(v, tmp, 10);
+                    for (char *t = tmp; *t && pos+1 < n; t++) buf[pos++] = *t;
+                    break; }
+        case 'u': { unsigned v = __builtin_va_arg(ap, unsigned);
+                    itoa((int)v, tmp, 10);
+                    for (char *t = tmp; *t && pos+1 < n; t++) buf[pos++] = *t;
+                    break; }
+        case 'x': { unsigned v = __builtin_va_arg(ap, unsigned);
+                    itoa((int)v, tmp, 16);
+                    for (char *t = tmp; *t && pos+1 < n; t++) buf[pos++] = *t;
+                    break; }
+        case 'c': { char c = (char)__builtin_va_arg(ap, int); EMIT(c); break; }
+        case '%': EMIT('%'); break;
+        }
     }
-    buf[i] = '\0'; va_end(args); return i;
+#undef EMIT
+    buf[pos] = '\0';
+    __builtin_va_end(ap);
+    return (int)pos;
 }

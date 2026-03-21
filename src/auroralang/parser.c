@@ -1,4 +1,5 @@
 #include "auroralang.h"
+#include "string.h"
 
 /* ═══════════════════════════════════════════════════════════════════
    AURORALANG  PARSER  –  Recursive Descent

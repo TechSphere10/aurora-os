@@ -1,36 +1,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "../auroralang/string.h"
-
-// Forward declarations for kernel functions
-void init_keyboard();
-void init_memory();
-bool keyboard_has_data();
-char keyboard_buffer_get();
-uint32_t get_total_memory();
-uint32_t get_used_memory();
-uint32_t get_free_memory();
-
-// Forward declarations for new systems
-int vfs_create(const char *path);
-int vfs_write(const char *path, const void *data, uint32_t size);
-int vfs_read(const char *path, void *buf, uint32_t *size);
-void vfs_ls(const char *path);
-void scheduler_list_processes();
-uint32_t sched_spawn(const char *name, uint32_t priority, uint32_t host_pid);
-void desktop_show_info();
-void desktop_list_nodes();
-void desktop_connect_nodes(int id1, int id2);
-void services_log_message(const char *message);
-void packages_list_installed();
-void packages_install(const char *package_name);
+#include "../kernel/kernel.h"
+#include "../auroralang/auroralang.h"
 
 // Forward declarations for AI system
 void ai_log_event(int type, const char* data);
 void ai_generate_code_from_intent(const char* intent, char* code_out, size_t out_size);
 void ai_explain_topic(const char *topic);
 void analyze_code(const char *code);
-int aurora_run_string(const char *code);
 
 // Shell functions
 void execute_command(char *cmd_line);
@@ -191,9 +169,11 @@ void cmd_process(int argc, char *argv[]) {
 }
 
 void cmd_memory(int argc, char *argv[]) {
-    uint32_t total = get_total_memory() / 1024;
-    uint32_t used = get_used_memory() / 1024;
-    uint32_t free = get_free_memory() / 1024;
+    uint32_t total_bytes, used_bytes, free_bytes;
+    mem_stats(&total_bytes, &used_bytes, &free_bytes);
+    uint32_t total = total_bytes / 1024;
+    uint32_t used = used_bytes / 1024;
+    uint32_t free = free_bytes / 1024;
 
     print_string("Total Memory: ", 0, 1, 0x07);
     print_number(total, 14, 1);
@@ -286,7 +266,7 @@ void cmd_touch(int argc, char *argv[]) {
 
 void cmd_ps(int argc, char *argv[]) {
     print_string("Process List:", 0, 1, 0x07);
-    scheduler_list_processes();
+    sched_list();
 }
 
 void cmd_desktop(int argc, char *argv[]) {
@@ -296,13 +276,20 @@ void cmd_desktop(int argc, char *argv[]) {
 
 void cmd_services(int argc, char *argv[]) {
     print_string("System Services:", 0, 1, 0x07);
-    services_log_message("Services status requested from shell");
+    timeline_record("shell", "Services status requested");
     // TODO: Show actual services status
 }
 
 void cmd_packages(int argc, char *argv[]) {
     print_string("Installed Packages:", 0, 1, 0x07);
-    packages_list_installed();
+    package_t pkg_buf[MAX_PACKAGES];
+    uint32_t count = list_packages(pkg_buf, MAX_PACKAGES);
+    int y = 2;
+    for(uint32_t i = 0; i < count; i++) {
+        print_string(pkg_buf[i].name, 0, y, 0x07);
+        print_string(pkg_buf[i].version, 20, y, 0x07);
+        y++;
+    }
 }
 
 void cmd_install(int argc, char *argv[]) {
@@ -313,7 +300,7 @@ void cmd_install(int argc, char *argv[]) {
     print_string("Installing ", 0, 1, 0x07);
     print_string(argv[1], 11, 1, 0x07);
     print_string("...", 11 + strlen(argv[1]), 1, 0x07);
-    packages_install(argv[1]);
+    download_package(argv[1]);
 }
 
 void cmd_symspawn(int argc, char *argv[]) {
@@ -323,7 +310,7 @@ void cmd_symspawn(int argc, char *argv[]) {
     }
     uint32_t host_pid = atoi(argv[1]);
     const char* name = argv[2];
-    uint32_t pid = sched_spawn(name, 1, host_pid); // host_pid removed to match kernel header
+    uint32_t pid = sched_spawn(name, 1, host_pid);
     if (pid > 0) {
         print_string("Spawned symbiote '", 0, 1, 0x07);
         print_string(name, 19, 1, 0x07);
@@ -405,7 +392,7 @@ void shell_main() {
     while (true) {
         // Check for keyboard input
         if (keyboard_has_data()) {
-            char c = keyboard_buffer_get();
+            char c = keyboard_getchar();
 
             if (c == '\n') {
                 // Execute command
@@ -462,11 +449,12 @@ void execute_command(char *cmd_line) {
     // Parse command and arguments
     char *argv[MAX_ARGS];
     int argc = 0;
+    char *saveptr;
 
-    char *token = strtok(cmd_line, " ");
+    char *token = strtok(cmd_line, " ", &saveptr);
     while (token && argc < MAX_ARGS) {
         argv[argc++] = token;
-        token = strtok(NULL, " ");
+        token = strtok(NULL, " ", &saveptr);
     }
 
     if (argc == 0) return;
